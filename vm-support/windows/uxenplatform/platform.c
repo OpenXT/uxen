@@ -403,7 +403,9 @@ uxp_ev_device_prepare_hardware(WDFDEVICE device, WDFCMRESLIST resources,
     if (!NT_SUCCESS(status))
         return status;
 
-    zp_init();
+    // FIXME: WHP zero-page
+    if (!uxen_is_whp_present())
+        zp_init();
 
     return STATUS_SUCCESS;
 }
@@ -610,7 +612,6 @@ uxp_ev_device_io_device_control(IN WDFQUEUE queue, IN WDFREQUEST request,
             d->max_size_mb = fdo_data->balloon_max;
             out_bytes = sizeof(*d);
         }
-
         break;
     }
     case ICC(IOCTL_UXEN_PLATFORM_BALLOON_SET_CONFIGURATION): {

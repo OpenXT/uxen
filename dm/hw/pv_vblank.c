@@ -2,15 +2,13 @@
 #include <dm/dm.h>
 #include <dm/vm.h>
 #include <dm/dev.h>
+#include <dm/hw/uxen_v4v.h>
 
 #include "uxendisp-common.h"
 #include "uxen_display.h"
 #include "uxdisp_hw.h"
 #include "pv_vblank.h"
 
-#include <winioctl.h>
-#define V4V_USE_INLINE_API
-#include <windows/uxenv4vlib/gh_v4vapi.h>
 #include <mmsystem.h>
 #include <ntstatus.h>
 
@@ -33,16 +31,18 @@ struct vblank_query_msg {
 } __attribute__ ((packed));
 
 struct vblank_ctx {
-    OVERLAPPED vblank_ov; /* must be first member */
+    v4v_async_t vblank_as; /* must be first member */
     uxen_thread vblank_thread;
     ioh_event vblank_ev;
+    ioh_event vblank_run_ev;
     ioh_event vblank_write_ev;
-    int vblank_exit;
+    ioh_event vblank_read_ev;
     int vblank_running;
+    int quit_thread;
     int hw_vblank_present;
     int hw_vblank_failing;
     int precise_soft_vblank;
-    v4v_channel_t v4v;
+    v4v_context_t v4v;
     uint64_t vblank_t0;
     uint64_t soft_vblank_period;
     uint64_t frame;
@@ -50,8 +50,10 @@ struct vblank_ctx {
     struct uxendisp_state *disp_state;
 };
 
-static void CALLBACK vblank_read_done(DWORD a, DWORD b, LPOVERLAPPED c);
+static void vblank_read_done(void *opaque);
 static void pv_vblank_respond(struct vblank_ctx *ctx, int enabled);
+
+static DWORD WINAPI vblank_thread_run(PVOID opaque);
 
 /* from d3dkmthk.h */
 typedef UINT D3DKMT_HANDLE;
@@ -164,7 +166,8 @@ vblank_event_cb(void *opaque)
     struct vblank_ctx *ctx = opaque;
 
     ioh_event_reset(&ctx->vblank_ev);
-    uxendisp_set_interrupt(ctx->disp_state, UXDISP_INTERRUPT_VBLANK);
+    if (ctx->vblank_running)
+        uxendisp_set_interrupt(ctx->disp_state, UXDISP_INTERRUPT_VBLANK);
 }
 
 struct vblank_ctx *
@@ -172,6 +175,7 @@ pv_vblank_init(struct uxendisp_state *s, int method)
 {
     v4v_bind_values_t bind = { };
     struct vblank_ctx *ctx;
+    int err = 0;
 
     d3dkmt_init();
 
@@ -183,8 +187,8 @@ pv_vblank_init(struct uxendisp_state *s, int method)
 
     ctx->disp_state = s;
 
-    if (!v4v_open(&ctx->v4v, UXENDISP_RING_SIZE, V4V_FLAG_ASYNC)) {
-        debug_printf("%s: error opening v4v %x\n", __FUNCTION__, (int)GetLastError());
+    if ((err = dm_v4v_open(&ctx->v4v, UXENDISP_RING_SIZE))) {
+        debug_printf("%s: error opening v4v %x\n", __FUNCTION__, err);
         goto error;
     }
 
@@ -193,15 +197,19 @@ pv_vblank_init(struct uxendisp_state *s, int method)
     bind.ring_id.partner = V4V_DOMID_UUID;
     memcpy(&bind.partner, v4v_idtoken, sizeof(bind.partner));
 
-    if (!v4v_bind(&ctx->v4v, &bind)) {
-        debug_printf("%s: error binding v4v %x\n", __FUNCTION__, (int)GetLastError());
-        v4v_close(&ctx->v4v);
+    if ((err = dm_v4v_bind(&ctx->v4v, &bind))) {
+        debug_printf("%s: error binding v4v %x\n", __FUNCTION__, err);
+        dm_v4v_close(&ctx->v4v);
         goto error;
     }
 
+    ioh_event_init(&ctx->vblank_read_ev);
     ioh_event_init(&ctx->vblank_write_ev);
     ioh_event_init(&ctx->vblank_ev);
+    /* auto reset event */
+    ctx->vblank_run_ev = CreateEvent(NULL, FALSE, FALSE, NULL);
 
+    ioh_add_wait_object(&ctx->vblank_read_ev, vblank_read_done, ctx, NULL);
     ioh_add_wait_object(&ctx->vblank_ev, vblank_event_cb, ctx, NULL);
 
     debug_printf("pv vblank initialised method=%d rate=%d mult=%d div=%d skip=%d, host rate @ %dhz\n",
@@ -209,8 +217,15 @@ pv_vblank_init(struct uxendisp_state *s, int method)
                  (int)disp_vsync_rate, (int)disp_vsync_mult, (int)disp_vsync_div,
                  (int)disp_vsync_skip,
                  pv_vblank_get_host_vsynchz());
-    ReadFileEx(ctx->v4v.v4v_handle, &ctx->query_msg, sizeof(ctx->query_msg),
-               &ctx->vblank_ov, vblank_read_done);
+    dm_v4v_async_init(&ctx->v4v, &ctx->vblank_as, ctx->vblank_read_ev);
+    dm_v4v_recv(&ctx->v4v, (v4v_datagram_t*)&ctx->query_msg,
+        sizeof(ctx->query_msg), &ctx->vblank_as);
+
+    if (create_thread(&ctx->vblank_thread, vblank_thread_run, ctx) < 0) {
+        debug_printf("failed to create vblank thread");
+        goto error;
+    }
+    elevate_thread(ctx->vblank_thread);
 
     return ctx;
 
@@ -224,15 +239,19 @@ void
 pv_vblank_cleanup(struct vblank_ctx *ctx)
 {
     debug_printf("stopping pv vblank\n");
+    ctx->quit_thread = 1;
     pv_vblank_stop(ctx);
+    wait_thread(ctx->vblank_thread);
     debug_printf("stopped pv vblank\n");
 
     ioh_del_wait_object(&ctx->vblank_ev, NULL);
 
     ioh_event_close(&ctx->vblank_ev);
+    ioh_event_close(&ctx->vblank_read_ev);
     ioh_event_close(&ctx->vblank_write_ev);
+    ioh_event_close(&ctx->vblank_run_ev);
 
-    v4v_close(&ctx->v4v);
+    dm_v4v_close(&ctx->v4v);
 
     free(ctx);
 }
@@ -241,26 +260,25 @@ static void
 pv_vblank_respond(struct vblank_ctx *ctx, int enabled)
 {
     struct vblank_query_msg resp = { };
-    DWORD wr;
+    int err = 0;
 
     resp.enabled = enabled;
     resp.dgram.addr.port = UXENDISP_VBLANK_PORT;
     resp.dgram.addr.domain = vm_id;
 
-    ctx->vblank_ov.hEvent = ctx->vblank_write_ev;
-
+    dm_v4v_async_init(&ctx->v4v, &ctx->vblank_as, ctx->vblank_write_ev);
     ResetEvent(ctx->vblank_write_ev);
-    if (!WriteFile(ctx->v4v.v4v_handle, &resp, sizeof(resp),
-                   &wr, &ctx->vblank_ov)) {
-        if (GetLastError() != ERROR_IO_PENDING)
-            debug_printf("vblank write failed %x\n", (int)GetLastError());
-    }
+
+    err = dm_v4v_send(&ctx->v4v, (v4v_datagram_t*)&resp, sizeof(resp),
+        &ctx->vblank_as);
+    if (err && err != ERROR_IO_PENDING)
+        debug_printf("vblank write failed %x\n", err);
 }
 
-static void CALLBACK
-vblank_read_done(DWORD a, DWORD b, LPOVERLAPPED c)
+static void
+vblank_read_done(void *opaque)
 {
-    struct vblank_ctx *ctx = (struct vblank_ctx*)c;
+    struct vblank_ctx *ctx = opaque;
 
     debug_printf("pv vblank query, responding with %d\n", (int)(!!disp_pv_vblank));
     pv_vblank_respond(ctx, !!disp_pv_vblank);
@@ -361,10 +379,9 @@ soft_wait_vblank(struct vblank_ctx *ctx)
     Sleep(wait_ns / 1000000);
 }
 
-static DWORD WINAPI
-vblank_thread_run(PVOID opaque)
+static void
+vblank_thread_run_one(struct vblank_ctx *ctx)
 {
-    struct vblank_ctx *ctx = (struct vblank_ctx*) opaque;
     NTSTATUS status;
     D3DKMT_WAITFORVERTICALBLANKEVENT we = { };
     int tmr_period_changed = 0;
@@ -375,7 +392,7 @@ vblank_thread_run(PVOID opaque)
 
     hw_vblank_update(ctx, &we);
 
-    while (!ctx->vblank_exit) {
+    while (ctx->vblank_running) {
         int need_soft_blank;
 
         if (ctx->hw_vblank_present) {
@@ -422,6 +439,18 @@ vblank_thread_run(PVOID opaque)
 
     if (tmr_period_changed)
         timeEndPeriod(1);
+}
+
+static DWORD WINAPI
+vblank_thread_run(PVOID opaque)
+{
+    struct vblank_ctx *ctx = (struct vblank_ctx*) opaque;
+
+    while (!ctx->quit_thread) {
+        WaitForSingleObject(ctx->vblank_run_ev, INFINITE);
+        if (ctx->vblank_running)
+            vblank_thread_run_one(ctx);
+    }
 
     return 0;
 }
@@ -429,26 +458,20 @@ vblank_thread_run(PVOID opaque)
 void
 pv_vblank_start(struct vblank_ctx *ctx)
 {
-    if (ctx->vblank_running)
+    if (!ctx)
         return;
 
-    ctx->vblank_exit = 0;
     ctx->vblank_running = 1;
-
-    if (create_thread(&ctx->vblank_thread, vblank_thread_run, ctx) < 0) {
-        debug_printf("failed to create vblank thread");
-        return;
-    }
-    elevate_thread(ctx->vblank_thread);
+    ioh_event_set(&ctx->vblank_run_ev);
 }
 
 void
 pv_vblank_stop(struct vblank_ctx *ctx)
 {
-    if (ctx->vblank_running) {
-        ctx->vblank_exit = 1;
-        wait_thread(ctx->vblank_thread);
-        ctx->vblank_running = 0;
-    }
+    if (!ctx)
+        return;
+
+    ctx->vblank_running = 0;
+    ioh_event_set(&ctx->vblank_run_ev);
 }
 

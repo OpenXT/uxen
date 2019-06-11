@@ -6,15 +6,4 @@
 
 DECLARE_PER_CPU(int, poke_ready);
 
-extern void _poke_setup_cpu(void);
 extern void poke_cpu(unsigned);
-
-static inline void
-poke_setup_cpu(void)
-{
-
-#ifdef __x86_64__
-    if (!this_cpu(poke_ready))
-      _poke_setup_cpu();
-#endif /* __x86_64__ */
-}

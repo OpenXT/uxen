@@ -49,6 +49,7 @@
 
 #include <uxen/uxen.h>
 #include <uxen/uxen_desc.h>
+#include <uxen/uxen_link.h>
 #include <uxen/mapcache.h>
 
 #ifndef __UXEN__
@@ -586,7 +587,8 @@ static char * __init cmdline_cook(char *p, char *loader_name)
 }
 #endif  /* __UXEN__ */
 
-intptr_t __init __interface_fn __uxen_start_xen(
+intptr_t __init UXEN_INTERFACE_FN(
+__uxen_start_xen)(
 #ifndef __UXEN__
     unsigned long mbi_p
 #else
@@ -1493,10 +1495,6 @@ intptr_t __init __interface_fn __uxen_start_xen(
 #ifndef __UXEN__
     smp_cpus_done();
 #endif  /* __UXEN__ */
-
-#ifdef UXEN_HOST_WINDOWS
-    mapcache_init();
-#endif  /* UXEN_HOST_WINDOWS */
 
     do_initcalls();
 

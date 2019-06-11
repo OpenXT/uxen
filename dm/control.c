@@ -24,7 +24,10 @@
 #include "timer.h"
 #include "block.h"
 #include "guest-agent.h"
+#include "hbmon.h"
 #include "vbox-drivers/shared-clipboard/clipboard-interface.h"
+
+#include <dm/whpx/whpx.h>
 
 #ifdef CONFIG_VBOXDRV
 #include "vbox-drivers/shared-folders/redir.h"
@@ -323,7 +326,6 @@ control_command_save(void *opaque, const char *id, const char *opt,
     filename = dict_get_string(d, "filename");
 
     vm_save_info.filename = filename ? strdup(filename) : NULL;
-
     vm_save_info.compress_mode = VM_SAVE_COMPRESS_NONE;
     c = dict_get_string(d, "compress");
     if (c) {
@@ -336,6 +338,9 @@ control_command_save(void *opaque, const char *id, const char *opt,
           vm_save_info.compress_mode = VM_SAVE_COMPRESS_CUCKOO_SIMPLE;
 #endif
     }
+    vm_save_info.save_via_temp = whpx_enable &&
+        !(vm_save_info.compress_mode == VM_SAVE_COMPRESS_CUCKOO ||
+          vm_save_info.compress_mode == VM_SAVE_COMPRESS_CUCKOO_SIMPLE);
 
     vm_save_info.single_page = dict_get_boolean(d, "single-page");
     vm_save_info.free_mem = dict_get_boolean(d, "free-mem");
@@ -604,7 +609,9 @@ control_command_inject_trap(void *opaque, const char *id, const char *opt,
     error_code = dict_get_integer_default(d, "error_code", -1);
     cr2 = dict_get_integer_default(d, "cr2", 0);
 
-    ret = xc_hvm_inject_trap(xc_handle, vm_id, vcpu, trap, error_code, cr2);
+    ret = !whpx_enable
+        ? xc_hvm_inject_trap(xc_handle, vm_id, vcpu, trap, error_code, cr2)
+        : whpx_inject_trap(vcpu, trap, error_code, cr2);
     if (ret)
 	control_send_error(cd, opt, id, ret, NULL);
     else
@@ -936,6 +943,19 @@ control_command_test(void *opaque, const char *id, const char *opt,
 #endif  /* CONTROL_TEST */
 
 static int
+control_command_hbmon_ping(void *opaque, const char *id, const char *opt,
+                           dict d, void *command_opaque)
+{
+    struct control_desc *cd = (struct control_desc *)opaque;
+
+    hbmon_ping();
+
+    control_send_ok(cd, opt, id, NULL);
+
+    return 0;
+}
+
+static int
 inject_ctrl_alt_delete(void *opaque, const char *id, const char *opt,
                        dict d, void *command_opaque)
 {
@@ -1027,21 +1047,36 @@ stats_do_collection(void *opaque)
         net_rx_rate = 0, net_tx_rate = 0;
     unsigned int net_nav_tx_rate = 0, net_nav_rx_rate = 0;
 
-    ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
-    if (ret != 1 || info.domid != vm_id) {
-        warn("xc_domain_getinfo failed");
-        return;
-    }
+    if (!whpx_enable) {
+        ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
+        if (ret != 1 || info.domid != vm_id) {
+            warn("xc_domain_getinfo failed");
+            return;
+        }
 
-    balloon_cur = balloon_min = balloon_max = 0;
-    uxen_platform_get_balloon_size(&balloon_cur, &balloon_min, &balloon_max);
-    priv = info.nr_pages * UXEN_PAGE_SIZE;
-    vram = info.nr_host_mapped_pages * UXEN_PAGE_SIZE;
-    highmem = info.nr_hidden_pages * UXEN_PAGE_SIZE;
-    lowmem = priv - highmem;
-    pod = info.nr_pod_pages * UXEN_PAGE_SIZE;
-    tmpl = info.nr_tmpl_shared_pages * UXEN_PAGE_SIZE;
-    zero = info.nr_zero_shared_pages * UXEN_PAGE_SIZE;
+        balloon_cur = balloon_min = balloon_max = 0;
+        uxen_platform_get_balloon_size(&balloon_cur, &balloon_min, &balloon_max);
+        priv = info.nr_pages * UXEN_PAGE_SIZE;
+        vram = info.nr_host_mapped_pages * UXEN_PAGE_SIZE;
+        highmem = info.nr_hidden_pages * UXEN_PAGE_SIZE;
+        lowmem = priv - highmem;
+        pod = info.nr_pod_pages * UXEN_PAGE_SIZE;
+        tmpl = info.nr_tmpl_shared_pages * UXEN_PAGE_SIZE;
+        zero = info.nr_zero_shared_pages * UXEN_PAGE_SIZE;
+    } else {
+        balloon_cur = balloon_min = balloon_max = 0;
+        uxen_platform_get_balloon_size(&balloon_cur, &balloon_min, &balloon_max);
+        /* note: it is possible to get accurate amount of private/shared pages via
+         * VirtualQuery, however it takes hundreds of million of cpu cycles when
+         * private ranges are fragmented. */
+        priv = vm_mem_mb * 1024 * 1024;
+        vram = 0;
+        highmem = 0;
+        lowmem = priv;
+        pod = 0;
+        tmpl = 0;
+        zero = 0;
+    }
     cpu_usage(&cpu_u, &cpu_k, &cpu_u_total_ms, &cpu_k_total_ms);
     blockstats_getabs(&blk_io_reads, NULL, &blk_io_writes, NULL);
 #if defined(CONFIG_NICKEL)
@@ -1177,6 +1212,7 @@ struct dict_rpc_command control_commands[] = {
             { "file", DICT_RPC_ARG_TYPE_STRING, .optional = 0 },
             { NULL, },
         }, },
+    { "hbmon-ping", control_command_hbmon_ping, },
     { "inject-ctrl-alt-delete", inject_ctrl_alt_delete, },
     { "inject-trap", control_command_inject_trap,
       .args = (struct dict_rpc_arg_desc[]) {
@@ -1261,6 +1297,7 @@ struct dict_rpc_command control_commands[] = {
       }, },
 #if defined(CONFIG_VBOXDRV)
     { "sf-add-redirect", control_command_sf_add_redirect,
+      .flags = CONTROL_SUSPEND_OK,
       .args = (struct dict_rpc_arg_desc[]) {
             { "name", DICT_RPC_ARG_TYPE_STRING, .optional = 0 },
             { "src", DICT_RPC_ARG_TYPE_STRING, .optional = 0 },
@@ -1278,6 +1315,7 @@ struct dict_rpc_command control_commands[] = {
         }
     },
     { "sf-del-redirect", control_command_sf_del_redirect,
+      .flags = CONTROL_SUSPEND_OK,
       .args = (struct dict_rpc_arg_desc[]) {
             { "name", DICT_RPC_ARG_TYPE_STRING, .optional = 0 },
             { "src", DICT_RPC_ARG_TYPE_STRING, .optional = 0 },

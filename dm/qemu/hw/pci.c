@@ -40,6 +40,8 @@
 #include <dm/vm-savefile-simple.h>
 // #include "qmp-commands.h"
 
+#include <dm/whpx/whpx.h>
+
 //#define DEBUG_PCI
 #ifdef DEBUG_PCI
 # define PCI_DPRINTF(format, ...)       printf(format, ## __VA_ARGS__)
@@ -789,10 +791,20 @@ static PCIDevice *do_pci_register_device(PCIDevice *pci_dev, PCIBus *bus,
     pstrcpy(pci_dev->name, sizeof(pci_dev->name), name);
     pci_dev->irq_state = 0;
 
-    if (xen_register_pcidev(pci_dev)) {
-	error_report("PCI: xen_register_pcidev failed for slot %d function %d",
-		     PCI_SLOT(devfn), PCI_FUNC(devfn));
-	return NULL;
+    if (!whpx_enable) {
+        if (xen_register_pcidev(pci_dev)) {
+            error_report(
+                "PCI: xen_register_pcidev failed for slot %d function %d",
+                PCI_SLOT(devfn), PCI_FUNC(devfn));
+            return NULL;
+        }
+    } else {
+        if (whpx_register_pcidev(pci_dev)) {
+            error_report(
+                "PCI: whpx_register_pcidev failed for slot %d function %d",
+                PCI_SLOT(devfn), PCI_FUNC(devfn));
+            return NULL;
+        }
     }
 
     pci_config_alloc(pci_dev);

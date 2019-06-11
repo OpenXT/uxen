@@ -78,7 +78,6 @@ void xc_cpuid_brand_get(char *str)
     str[12] = '\0';
 }
 
-#ifndef __UXEN_TOOLS__
 static void amd_xc_cpuid_policy(
     xc_interface *xch, domid_t domid,
     const unsigned int *input, unsigned int *regs,
@@ -165,7 +164,6 @@ static void amd_xc_cpuid_policy(
 
     }
 }
-#endif  /* __UXEN_TOOLS__ */
 
 static void intel_xc_cpuid_policy(
     xc_interface *xch, domid_t domid,
@@ -420,11 +418,9 @@ static void xc_cpuid_hvm_policy(
     }
 
     xc_cpuid_brand_get(brand);
-#ifndef __UXEN_TOOLS__
     if ( strstr(brand, "AMD") )
         amd_xc_cpuid_policy(xch, domid, input, regs, is_pae, is_nestedhvm);
     else
-#endif  /* __UXEN_TOOLS__ */
         intel_xc_cpuid_policy(xch, domid, input, regs, is_pae, is_nestedhvm);
 
 }

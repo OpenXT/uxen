@@ -391,6 +391,7 @@ void acpi_build_tables(struct acpi_config *config, unsigned int physical)
     int                  nr_secondaries, i;
 
     /* Allocate and initialise the acpi info area. */
+    /* hyperv: assume preallocated by dm */
     mem_hole_populate_ram(ACPI_INFO_PHYSICAL_ADDRESS >> PAGE_SHIFT, 1);
     acpi_info = (struct acpi_info *)ACPI_INFO_PHYSICAL_ADDRESS;
     memset(acpi_info, 0, sizeof(*acpi_info));

@@ -16,6 +16,10 @@
 #include "async-op.h"
 #endif
 
+#if !defined(LIBIMG)
+#include <dm/whpx/whpx.h>
+#endif
+
 WaitObjects wait_objects;
 struct io_handler_queue io_handlers;
 
@@ -34,6 +38,24 @@ int trace_waitobjects = 0;
 #define delay_log(fmt, ...) do { ; } while(0)
 #endif
 
+static void
+ioh_waitobjects_lock(WaitObjects *w)
+{
+#if !defined(LIBIMG)
+    if (whpx_enable)
+        critical_section_enter(&w->lock);
+#endif
+}
+
+static void
+ioh_waitobjects_unlock(WaitObjects *w)
+{
+#if !defined(LIBIMG)
+    if (whpx_enable)
+        critical_section_leave(&w->lock);
+#endif
+}
+
 void
 ioh_waitobjects_grow(WaitObjects *w)
 {
@@ -42,17 +64,14 @@ ioh_waitobjects_grow(WaitObjects *w)
     w->desc = realloc(w->desc, sizeof(WaitObjectsDesc) * w->max);
 }
 
-#ifndef DEBUG_WAITOBJECTS
-int ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
-                        WaitObjects *w)
-#else
-int _ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
-                         WaitObjects *w, const char *func_name)
-#endif
+int __ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
+                          WaitObjects *w, const char *func_name, int interrupt)
 {
 
     if (w == NULL)
 	w = &wait_objects;
+
+    ioh_waitobjects_lock(w);
 
     if (w->num == w->max)
         ioh_waitobjects_grow(w);
@@ -66,8 +85,29 @@ int _ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
 
     w->num++;
 
+    ioh_waitobjects_unlock(w);
+
+#if !defined(LIBIMG)
+    if (whpx_enable && interrupt)
+        ioh_wait_interrupt(w);
+#endif
+
     return 0;
 }
+
+#ifndef DEBUG_WAITOBJECTS
+int ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
+                        WaitObjects *w)
+{
+    return __ioh_add_wait_object(event, func, opaque, w, NULL, 1);
+}
+#else
+int _ioh_add_wait_object(ioh_event *event, WaitObjectFunc *func, void *opaque,
+                         WaitObjects *w, const char *func_name)
+{
+    return __ioh_add_wait_object(event, func, opaque, w, func_name, 1);
+}
+#endif
 
 void ioh_del_wait_object(ioh_event *event, WaitObjects *w)
 {
@@ -76,11 +116,14 @@ void ioh_del_wait_object(ioh_event *event, WaitObjects *w)
     if (w == NULL)
         w = &wait_objects;
 
+    ioh_waitobjects_lock(w);
+
     for (i = 0; i < w->num; i++)
         if (w->events[i] == *event)
             break;
 
     if (i == w->num) {
+        ioh_waitobjects_unlock(w);
         debug_printf("ioh_del_wait_object: event %p not found in %s\n",
                      event, w == &wait_objects ? "main" : "block");
         debug_break();
@@ -94,6 +137,7 @@ void ioh_del_wait_object(ioh_event *event, WaitObjects *w)
 	memmove(&w->desc[i], &w->desc[i + 1],
 		(w->num - i) * sizeof(w->desc[0]));
     }
+    ioh_waitobjects_unlock(w);
 }
 
 #if defined(CONFIG_NETEVENT)
@@ -143,6 +187,7 @@ void ioh_init_wait_objects(WaitObjects *w)
     w->max = 0;
     w->del_state = WO_OK;
     w->interrupt = (uintptr_t)CreateEvent(NULL, TRUE, FALSE, NULL);
+    critical_section_init(&w->lock);
 }
 
 void ioh_wait_interrupt(WaitObjects *w)
@@ -166,6 +211,17 @@ void ioh_wait_for_objects(struct io_handler_queue *iohq,
     uint64_t t1, t2, t3, t4;
 #endif
     int first;
+
+    /* whp will execute requests coming from vcpus on vcpu threads, unlike uxen
+       where they're executed on main thread. But most request code in uxendm
+       expects to be called from main thread therefore we use lock to
+       synchronize/simulate single thread request handling.
+       This seems significantly faster than alternate approach of posting
+       events to qemu main thread */
+#if !defined(LIBIMG)
+    if (whpx_enable && iohq == &io_handlers)
+        whpx_lock_iothread();
+#endif
 
     if (ret_wait)
         *ret_wait = 0;
@@ -225,7 +281,7 @@ void ioh_wait_for_objects(struct io_handler_queue *iohq,
         iohq->wait_queue = w;
         critical_section_leave(&iohq->lock);
     }
-    ioh_add_wait_object((ioh_event *)&w->interrupt, NULL, NULL, w);
+    __ioh_add_wait_object((ioh_event *)&w->interrupt, NULL, NULL, w, NULL, 0);
 
 #ifndef LIBIMG
     if (active_timers) {
@@ -256,8 +312,17 @@ void ioh_wait_for_objects(struct io_handler_queue *iohq,
             num = MAXIMUM_WAIT_EVENTS;
         if (ret_wait)
             tmp_ts = os_get_clock_ms();
+
+#if !defined(LIBIMG)
+        if (whpx_enable && iohq == &io_handlers)
+            whpx_unlock_iothread();
+#endif
         ret = WaitForMultipleObjectsEx(num, &w->events[first], FALSE,
                                        first ? 0 : *timeout, TRUE);
+#if !defined(LIBIMG)
+        if (whpx_enable && iohq == &io_handlers)
+            whpx_lock_iothread();
+#endif
         if (ret_wait)
             *ret_wait += (int) (os_get_clock_ms() - tmp_ts);
 
@@ -315,6 +380,7 @@ void ioh_wait_for_objects(struct io_handler_queue *iohq,
             ret = 0;
         } else if (ret == WAIT_TIMEOUT) {
 	    trace_waitobjects_print("timeout\n");
+            first += num;
             ret = 0;
 	    break;
         } else if (ret == WAIT_IO_COMPLETION) {
@@ -394,6 +460,11 @@ void ioh_wait_for_objects(struct io_handler_queue *iohq,
                       ((t4 - t3) / SCALE_US) % 1000);
 #endif
     }
+#endif
+
+#if !defined(LIBIMG)
+    if (whpx_enable && iohq == &io_handlers)
+        whpx_unlock_iothread();
 #endif
 }
 

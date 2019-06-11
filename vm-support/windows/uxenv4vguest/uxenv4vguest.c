@@ -12,6 +12,8 @@ UxvgInitializeDeviceExtension(
 
     PAGED_CODE();
 
+    DevExt->EchoRing = NULL;
+
     status = UxvgInterruptCreate(DevExt);
 
     if (!NT_SUCCESS(status)) {
@@ -151,14 +153,14 @@ Return Value:
 
 --*/
 {
-    PAGED_CODE ();
-    UNREFERENCED_PARAMETER(Driver);
+    PDRIVER_OBJECT pdo;
 
+    PAGED_CODE ();
 
     uxen_msg( "PlxEvtDriverContextCleanup: enter");
 
-
-    uxen_v4v_guest_undo_plumbing();
+    pdo = WdfDriverWdmGetDriverObject(Driver);
+    uxen_v4v_guest_undo_plumbing(pdo);
 }
 
 

@@ -58,8 +58,6 @@ static void ahci_reset_port(AHCIState *s, int port);
 static int ahci_write_fis_d2h(AHCIDevice *ad, uint8_t *cmd_fis);
 static void ahci_init_d2h(AHCIDevice *ad);
 
-extern void simple_map_nerf(void);
-
 static uint32_t  ahci_shadow_port_read(AHCIShadow *n, int port, int offset)
 {
     uint32_t val;
@@ -984,6 +982,12 @@ static int handle_cmd(AHCIState *s, int port, int slot)
     tbl_addr = le64_to_cpu(cmd->tbl_addr);
 
     cmd_len = (opts & AHCI_CMD_HDR_CMD_FIS_LEN) * 4;
+
+    if (cmd_len <= 0) {
+        warn("AHCI: 0-length command list!\n");
+        goto out_no_unmap;
+    }
+
     cmd_fis = vm_memory_map(tbl_addr, &cmd_len, 1, 0);
 
     if (!cmd_fis || (cmd_len != (opts & AHCI_CMD_HDR_CMD_FIS_LEN) * 4)) {
@@ -1125,6 +1129,7 @@ static int handle_cmd(AHCIState *s, int port, int slot)
 out:
     vm_memory_unmap(tbl_addr, cmd_len, 1, 0, cmd_fis, cmd_len);
 
+out_no_unmap:
     if (s->dev[port].port.ifs[0].status & (BUSY_STAT|DRQ_STAT)) {
         /* async command, complete later */
         s->dev[port].busy_slot = slot;
@@ -1482,7 +1487,6 @@ static int ahci_post_load(void *opaque, int version_id)
     AHCIState *s = opaque;
 
     if (vm_use_v4v_disk && vm_v4v_disable_ahci_clones) {
-        simple_map_nerf();
         ahci_shadow(s);
         return 0;
     }

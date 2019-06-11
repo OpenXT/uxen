@@ -76,13 +76,10 @@ struct uxendisp_state {
     uint32_t mode;
     uint32_t xtra_ctrl;
     int resumed;
+    int dirty_tracking;
 
     struct vblank_ctx *vblank_ctx;
 };
-
-#define REFRESH_TIMEOUT_MS 200
-static struct Timer *refresh_timer = NULL;
-static int stop_refresh_timer = 1;
 
 #define crtc_to_state(c) (container_of((c), struct uxendisp_state, crtcs[(c)->id]))
 
@@ -197,15 +194,18 @@ crtc_draw(struct uxendisp_state *s, int crtc_id)
     int bank_id = crtc->offset >> UXENDISP_BANK_ORDER;
     uint32_t bank_offset = crtc->offset & (UXENDISP_BANK_SIZE - 1);
     struct bank_state *bank = &s->banks[bank_id];
-    int rc;
     int npages;
-    uint8_t *dirty;
     uint8_t *d;
     int linesize;
 
     int y, y_start;
     uint32_t addr, addr1;
     uint32_t page0, page1, pagei, page_min, page_max;
+
+    int full_refresh = 0;
+
+    int rc;
+    uint8_t *dirty = NULL;
 
     if (crtc->regs && crtc->flush_pending)
         crtc_flush(s, crtc_id, crtc->offset, 0);
@@ -217,17 +217,30 @@ crtc_draw(struct uxendisp_state *s, int crtc_id)
     if (npages > (UXENDISP_BANK_SIZE >> TARGET_PAGE_BITS))
         return;
 
-    dirty = alloca((npages + 7) / 8);
-
-    rc = xen_hvm_track_dirty_vram(bank->vram.gfn,
-        (s->mode & UXDISP_MODE_PAGE_TRACKING_DISABLED) ? 0 : npages, dirty, 1);
-    if (rc) {
-        DPRINTF("xen_hvm_track_dirty_vram failed: %d\n", errno);
-        return;
+    if (!crtc_id &&
+        vm_vram_dirty_tracking &&
+        !(s->mode & UXDISP_MODE_PAGE_TRACKING_DISABLED) &&
+        !whpx_enable) {
+        dirty = alloca((npages + 7) / 8);
+        rc = xen_hvm_track_dirty_vram(bank->vram.gfn, npages, dirty, 1);
+        if (rc) {
+            DPRINTF("xen_hvm_track_dirty_vram failed: %d\n", errno);
+            return;
+        }
+        s->dirty_tracking = 1;
+    } else {
+        /* with full_refresh == 1, dirty is not accessed below */
+        full_refresh = 1;
+        if (s->dirty_tracking) {
+            xen_hvm_track_dirty_vram(0 , 0, NULL, 0);
+            s->dirty_tracking = 0;
+        }
     }
 
-    if (!stop_refresh_timer)
-        memset(dirty, 0xff, (npages + 7) / 8);
+    if (full_refresh && ds_vram_surface(crtc->ds->surface)) {
+        dpy_update(crtc->ds, 0, 0, crtc->xres, crtc->yres);
+        return;
+    }
 
     if (ds_surface_lock(crtc->ds, &d, &linesize))
         return;
@@ -236,14 +249,15 @@ crtc_draw(struct uxendisp_state *s, int crtc_id)
     page_min = (uint32_t)-1;
     page_max = 0;
     for (y = 0; y < crtc->yres; y++) {
-        int update = 0;
+        int update;
 
         addr = addr1;
         page0 = addr >> TARGET_PAGE_BITS;
         page1 = (addr + crtc->stride - 1) >> TARGET_PAGE_BITS;
 
-        for (pagei = page0; pagei <= page1; pagei++)
-            update |= dirty[pagei / 8] & (1 << (pagei % 8));
+        update = full_refresh;
+        for (pagei = page0; !update && pagei <= page1; pagei++)
+            update |= (dirty[pagei / 8] & (1 << (pagei % 8)));
 
         if (update) {
             if (y_start < 0)
@@ -267,6 +281,10 @@ crtc_draw(struct uxendisp_state *s, int crtc_id)
                     break;
                 case UXDISP_CRTC_FORMAT_BGR_555:
                     draw_line_15(d, bank->vram.view + addr1, crtc->xres);
+                    break;
+                default:
+                    debug_printf("unexpected display format %d\n",
+                        crtc->format);
                     break;
                 }
             }
@@ -531,8 +549,10 @@ crtc_flush(struct uxendisp_state *s, int crtc_id, uint32_t offset, int force)
                 memset(dst, 0xff, new_max - curr_max);
         }
 
-        if (s->mode & UXDISP_MODE_PAGE_TRACKING_DISABLED)
+        if (!crtc_id && s->dirty_tracking) {
             xen_hvm_track_dirty_vram(0 , 0, NULL, 0);
+            s->dirty_tracking = 0;
+        }
 
         display_resize_from(crtc->ds, w, h,
                             uxdisp_fmt_to_bpp(fmt),
@@ -735,12 +755,10 @@ uxendisp_mmio_write(void *opaque, target_phys_addr_t addr, uint64_t val,
     case UXDISP_REG_CURSOR_ENABLE:
         s->cursor_en = val & 0x1;
         cursor_flush(s);
-        stop_refresh_timer = 1;
         return;
     case UXDISP_REG_MODE:
         s->mode = val;
-        if (!vm_vram_dirty_tracking)
-            s->mode |= UXDISP_MODE_PAGE_TRACKING_DISABLED;
+        console_mask_periodic(!!(s->mode & UXDISP_MODE_PAGE_TRACKING_DISABLED));
         crtc_flush(s, 0, s->crtcs[0].offset, 1);
         uxendisp_invalidate(&s->crtcs[0]);
         return;
@@ -965,6 +983,8 @@ uxendisp_post_load(void *opaque, int version_id)
     for (crtc_id = 0; crtc_id < UXDISP_NB_CRTCS; crtc_id++)
         s->crtcs[crtc_id].flush_pending = 1;
 
+    console_mask_periodic(!!(s->mode & UXDISP_MODE_PAGE_TRACKING_DISABLED));
+
 #ifdef _WIN32
     if (s->xtra_ctrl & UXDISP_XTRA_CTRL_PV_VBLANK_ENABLE)
         pv_vblank_start(s->vblank_ctx);
@@ -991,6 +1011,8 @@ uxendisp_resume(void *opaque, int version_id)
             return ret;
     }
     s->resumed = 1;
+
+    do_dpy_force_refresh(NULL);
     return 0;
 }
 
@@ -1075,17 +1097,6 @@ uxendisp_reset(void *opaque)
     (void)s;
 }
 
-static void
-refresh(void *opaque)
-{
-    do_dpy_trigger_refresh(NULL);
-
-    if (!stop_refresh_timer && refresh_timer)
-        mod_timer(refresh_timer, get_clock_ms(vm_clock) + REFRESH_TIMEOUT_MS);
-    else
-        debug_printf("%s: vram refresh timer is off\n", __FUNCTION__);
-}
-
 static int uxendisp_initfn(PCIDevice *dev)
 {
     struct uxendisp_state *s = DO_UPCAST(struct uxendisp_state, dev, dev);
@@ -1142,20 +1153,11 @@ static int uxendisp_initfn(PCIDevice *dev)
 
     vga_init(v, pci_address_space(dev), pci_address_space_io(dev), s->crtcs[0].ds);
 
-    if (!vm_vram_dirty_tracking) {
+    if (!vm_vram_dirty_tracking)
         debug_printf("%s: vram dirty tracking disabled\n", __FUNCTION__);
-        s->mode |= UXDISP_MODE_PAGE_TRACKING_DISABLED;
-    }
 
     qemu_register_reset(uxendisp_reset, s);
     uxendisp_reset(s);
-
-    if (!vm_vram_dirty_tracking) {
-        debug_printf("%s: vram refresh timer is on\n", __FUNCTION__);
-        stop_refresh_timer = 0;
-        refresh_timer = new_timer_ms(vm_clock, refresh, NULL);
-        mod_timer(refresh_timer, get_clock_ms(vm_clock) + REFRESH_TIMEOUT_MS);
-    }
 
     return 0;
 }
@@ -1164,12 +1166,6 @@ static int uxendisp_exitfn(PCIDevice *dev)
 {
     struct uxendisp_state *s = DO_UPCAST(struct uxendisp_state, dev, dev);
     VGAState *v = &s->vga;
-
-    if (refresh_timer) {
-        del_timer(refresh_timer);
-        free_timer(refresh_timer);
-        refresh_timer = NULL;
-    }
 
 #ifdef _WIN32
     pv_vblank_cleanup(s->vblank_ctx);

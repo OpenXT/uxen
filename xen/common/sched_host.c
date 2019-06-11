@@ -190,23 +190,23 @@ const struct scheduler sched_host_def = {
     .opt_name       = "host",
     .sched_id       = XEN_SCHEDULER_HOST,
 
-#if 0
+#ifndef __UXEN__
     .init_domain    = hostsched_dom_init,
-#endif
+#endif  /* __UXEN__ */
     .destroy_domain = hostsched_dom_destroy,
 
-#if 0
+#ifndef __UXEN__
     .alloc_vdata    = hostsched_alloc_vdata,
     .free_vdata     = hostsched_free_vdata,
-#endif
+#endif  /* __UXEN__ */
 
     .sleep          = hostsched_vcpu_sleep,
     .wake           = hostsched_vcpu_wake,
     .yield          = hostsched_vcpu_yield,
 
-#if 0
+#ifndef __UXEN__
     .init           = hostsched_init,
-#endif
+#endif  /* __UXEN__ */
 };
 
 /*

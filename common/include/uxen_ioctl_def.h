@@ -35,8 +35,6 @@ struct uxen_load_desc {
 #define	UXENSETEVENT		UXEN_IOW(18, struct uxen_event_desc)
 #define	UXENTARGETVM		UXEN_IOWR(19, struct uxen_targetvm_desc)
 #define	UXENDESTROYVM		UXEN_IOW(20, struct uxen_destroyvm_desc)
-#define	UXENMEMCACHEINIT	UXEN_IOWR(21, struct uxen_memcacheinit_desc)
-#define	UXENMEMCACHEMAP		UXEN_IOW(22, struct uxen_memcachemap_desc)
 #define	UXENSETEVENTCHANNEL	UXEN_IOW(23, struct uxen_event_channel_desc)
 #define	UXENQUERYVM		UXEN_IOWR(24, struct uxen_queryvm_desc)
 #define	UXENPOWER		UXEN_IOW(25, uint32_t)

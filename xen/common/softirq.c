@@ -146,14 +146,14 @@ check_work_vcpu(struct vcpu *v)
     check_vcpu_timer_interrupt(v);
 
     if (softirq_pending_vcpu(v, 0)) {
-        cpu_irq_enable();
+        vmexec_irq_enable();
         __do_softirq_vcpu(v, 0);
 
         return 1;
     }
 
     if (UI_HOST_CALL(ui_host_needs_preempt)) {
-        cpu_irq_enable();
+        vmexec_irq_enable();
         return 1;
     }
 

@@ -9,7 +9,11 @@
 #include <uxen/mapcache.h>
 
 #ifdef UXEN_HOST_WINDOWS
-  #define POKE_INT_VECTOR 0x2f /* ISR: nt!KiDpcInterrupt */
+  #ifdef __x86_64__
+    #define POKE_INT_VECTOR 0x2f /* ISR: nt!KiDpcInterrupt */
+  #else
+    #define POKE_INT_VECTOR 0x1f /* ISR: hal!HalpApicSpuriousService */
+  #endif
 #else
   #error system not supported
 #endif
@@ -93,7 +97,6 @@ typedef union
 #define POKE_APIC_DS_ALL		2
 #define POKE_APIC_DS_ALL_EXCLUDING_SELF	3
 
-#ifdef __x86_64__
 DECLARE_PER_CPU (int, poke_is_x2apic);
 DECLARE_PER_CPU (uint32_t, poke_lapic_id);
 
@@ -115,12 +118,11 @@ poke_write_32 (volatile void __iomem *addr, uint32_t val)
   asm volatile ("mov" "l" " %0,%1"::"r" (val), "m" (* (volatile uint32_t __force *) addr):"memory");
 }
 
-static int
-poke_x2apic_enabled(void)
+static int poke_x2apic_enabled(void) 
 {
   uint64_t base;
   rdmsrl (MSR_IA32_LAPIC_BASE, base);
-  return !!(base & MSR_IA32_LAPIC_BASE_EXTD);
+return !!(base & MSR_IA32_LAPIC_BASE_EXTD);
 }
 
 static void *
@@ -142,7 +144,6 @@ poke_xapic_read (void *base, unsigned reg)
 {
   return poke_read_32 (base + reg);
 }
-
 static void
 poke_xapic_write (void *base, unsigned reg, uint32_t v)
 {
@@ -162,8 +163,7 @@ poke_x2apic_read (unsigned reg)
   return val;
 }
 
-static void
-poke_x2apic_write(unsigned reg,uint64_t val)
+static void poke_x2apic_write(unsigned reg,uint64_t val)
 {
   wrmsrl(MSR_IA32_X2APIC_BASE+reg,val);
 }
@@ -192,7 +192,7 @@ poke_xapic_busy_wait (void *base)
   do {
       icr = poke_xapic_read_icr (base);
   } while (icr.delivery_status == POKE_APIC_STATUS_PENDING);
-}
+    }
 
 static void
 poke_x2apic_write_icr (x2apic_icr_t icr)
@@ -286,7 +286,7 @@ poke_x2apic_send_int (uint32_t dest)
 }
 
 void
-_poke_setup_cpu (void)
+poke_setup_cpu (void)
 {
   this_cpu(poke_is_x2apic)=poke_x2apic_enabled();
 
@@ -303,17 +303,14 @@ _poke_setup_cpu (void)
 
   mb ();
   this_cpu (poke_ready) = 1;
-  UI_HOST_CALL(ui_printf, NULL, "poke: cpu%d lapic id %p\n",
-               (int) smp_processor_id(),
-               (void *) (size_t) this_cpu (poke_lapic_id));
+  printk("poke: cpu%d lapic id %p\n",
+	 (int) smp_processor_id(),
+	 (void *) (size_t) this_cpu (poke_lapic_id));
 }
-#endif /* __x86_64__ */
 
 void
 poke_cpu (unsigned cpu)
 {
-#ifdef __x86_64__
-  poke_setup_cpu();
 
   if (!per_cpu (poke_ready, cpu))
     return;
@@ -322,7 +319,40 @@ poke_cpu (unsigned cpu)
     poke_x2apic_send_int (per_cpu (poke_lapic_id, cpu));
   else 
     poke_xapic_send_int (per_cpu (poke_lapic_id, cpu));
-#else
-  on_each_cpu(NULL, NULL, 1);
-#endif /* __x86_64__ */
 }
+
+static int
+cpu_poke_callback(struct notifier_block *nfb, unsigned long action, void *hcpu)
+{
+    int rc = 0;
+
+    switch (action) {
+    case CPU_STARTING:
+	poke_setup_cpu();
+	break;
+    default:
+	break;
+    }
+
+    return !rc ? NOTIFY_DONE : notifier_from_errno(rc);
+}
+
+static struct notifier_block cpu_poke_nfb = {
+    .notifier_call = cpu_poke_callback
+};
+
+static int __init
+poke_presmp_init(void)
+{
+    register_cpu_notifier(&cpu_poke_nfb);
+    return 0;
+}
+presmp_initcall(poke_presmp_init);
+
+static int __init
+poke_init(void)
+{
+    poke_setup_cpu();
+    return 0;
+}
+__initcall(poke_init);

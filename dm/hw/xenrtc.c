@@ -1,4 +1,3 @@
-
 #include <dm/qemu_glue.h>
 #include <dm/qemu/hw/isa.h>
 
@@ -50,7 +49,7 @@ static uint32_t cmos_ioport_read(void *opaque, uint32_t addr)
     }
 }
 
-void rtc_set_memory(ISADevice *dev, int addr, int val)
+void uxen_rtc_set_memory(ISADevice *dev, int addr, int val)
 {
     RTCState *s = DO_UPCAST(RTCState, dev, dev);
     if (addr >= 0 && addr <= 127)
@@ -73,8 +72,8 @@ static void rtc_set_date_from_host(ISADevice *dev)
     tm = gmtime(&ti);		/* XXX localtime and update from guest? */
 
     val = rtc_to_bcd(s, (tm->tm_year / 100) + 19);
-    rtc_set_memory(dev, REG_IBM_CENTURY_BYTE, val);
-    rtc_set_memory(dev, REG_IBM_PS2_CENTURY_BYTE, val);
+    uxen_rtc_set_memory(dev, REG_IBM_CENTURY_BYTE, val);
+    uxen_rtc_set_memory(dev, REG_IBM_PS2_CENTURY_BYTE, val);
 }
 
 static const VMStateDescription vmstate_rtc = {

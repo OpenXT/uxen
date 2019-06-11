@@ -5,6 +5,11 @@
 #if !defined(__GNUC__)
 #define V4V_PACKED
 #define V4V_INLINE __inline
+#ifdef __cplusplus
+#define V4V_EXTERN extern "C"
+#else
+#define V4V_EXTERN extern
+#endif
 #else /* __GNUC__ */
 
 /* #include  <xen/types.h> */
@@ -282,7 +287,7 @@ struct v4v_ring_message_header
 //
 
 #if !defined(__GNUC__)
-extern void _mm_mfence(void);
+V4V_EXTERN void _mm_mfence(void);
 #pragma intrinsic(_mm_mfence)
 
 static __inline void

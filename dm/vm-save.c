@@ -25,6 +25,7 @@
 #include "introspection_info.h"
 #include "monitor.h"
 #include "qemu_savevm.h"
+#include "timer.h"
 #include "vm.h"
 #include "vm-save.h"
 #include "vm-savefile.h"
@@ -47,7 +48,7 @@
 
 #include <xen/hvm/e820.h>
 
-
+#include <dm/whpx/whpx.h>
 
 #define DECOMPRESS_THREADED
 #define DECOMPRESS_THREADS 2
@@ -88,9 +89,12 @@ uxenvm_savevm_initiate(char **err_msg)
 {
     int ret;
 
-    ret = xc_domain_shutdown(xc_handle, vm_id, SHUTDOWN_suspend);
+    if (!whpx_enable)
+        ret = xc_domain_shutdown(xc_handle, vm_id, SHUTDOWN_suspend);
+    else
+        ret = whpx_vm_shutdown(SHUTDOWN_suspend);
     if (ret)
-	asprintf(err_msg, "xc_domain_shutdown(SHUTDOWN_suspend) failed: %d",
+	asprintf(err_msg, "domain shutdown(SHUTDOWN_suspend) failed: %d",
 		 ret);
 
     return ret;
@@ -126,6 +130,23 @@ static struct page_offset_info dm_lazy_load_info = { };
 #define uxenvm_read_struct(f, s)                                        \
     filebuf_read(f, (uint8_t *)(s) + sizeof(marker),                    \
                  uxenvm_read_struct_size(s))
+
+static int
+vm_get_context(void *buffer, size_t buffer_sz)
+{
+    return !whpx_enable
+        ? xc_domain_hvm_getcontext(xc_handle, vm_id, buffer, buffer_sz)
+        : whpx_vm_get_context(buffer, buffer_sz);
+        
+}
+
+static int
+vm_set_context(void *buffer, size_t buffer_sz)
+{
+    return !whpx_enable
+        ? xc_domain_hvm_setcontext(xc_handle, vm_id, buffer, buffer_sz)
+        : whpx_vm_set_context(buffer, buffer_sz);
+}
 
 static int
 uxenvm_savevm_get_dm_state(uint8_t **dm_state_buf, int *dm_state_size,
@@ -169,6 +190,7 @@ uxenvm_savevm_write_info(struct filebuf *f, uint8_t *dm_state_buf,
     xc_dominfo_t dom_info[1];
     xc_vcpuinfo_t vcpu_info;
     struct xc_save_version_info s_version_info;
+    struct xc_save_clock_info s_clock_info;
     struct xc_save_tsc_info s_tsc_info;
     struct xc_save_vcpu_info s_vcpu_info;
     struct xc_save_hvm_params s_hvm_params;
@@ -194,68 +216,76 @@ uxenvm_savevm_write_info(struct filebuf *f, uint8_t *dm_state_buf,
     struct xc_save_mapcache_params s_mapcache_params;
     struct xc_save_vm_template_file s_vm_template_file;
     int j;
-    int ret;
+    int ret = 0;
 
     s_version_info.marker = XC_SAVE_ID_VERSION;
     s_version_info.version = SAVE_FORMAT_VERSION;
     filebuf_write(f, &s_version_info, sizeof(s_version_info));
 
-    s_tsc_info.marker = XC_SAVE_ID_TSC_INFO;
-    ret = xc_domain_get_tsc_info(xc_handle, vm_id, &s_tsc_info.tsc_mode,
-				 &s_tsc_info.nsec, &s_tsc_info.khz,
-				 &s_tsc_info.incarn);
-    if (ret < 0) {
-	asprintf(err_msg, "xc_domain_get_tsc_info() failed");
-	ret = -EPERM;
-	goto out;
-    }
-    APRINTF("tsc info: mode %d nsec %"PRIu64" khz %d incarn %d",
+    s_clock_info.marker = XC_SAVE_ID_CLOCK_INFO;
+    s_clock_info.adjust_offset = get_clock_ns(vm_clock);
+    filebuf_write(f, &s_clock_info, sizeof(s_clock_info));
+
+    if (!whpx_enable) {
+        /* uxen specific */
+
+        s_tsc_info.marker = XC_SAVE_ID_TSC_INFO;
+        ret = xc_domain_get_tsc_info(xc_handle, vm_id, &s_tsc_info.tsc_mode,
+                                     &s_tsc_info.nsec, &s_tsc_info.khz,
+                                     &s_tsc_info.incarn);
+        if (ret < 0) {
+            asprintf(err_msg, "xc_domain_get_tsc_info() failed");
+            ret = -EPERM;
+            goto out;
+        }
+        APRINTF("tsc info: mode %d nsec %"PRIu64" khz %d incarn %d",
 	    s_tsc_info.tsc_mode, s_tsc_info.nsec, s_tsc_info.khz,
 	    s_tsc_info.incarn);
-    filebuf_write(f, &s_tsc_info, sizeof(s_tsc_info));
+        filebuf_write(f, &s_tsc_info, sizeof(s_tsc_info));
 
-    ret = xc_domain_getinfo(xc_handle, vm_id, 1, dom_info);
-    if (ret != 1 || dom_info[0].domid != vm_id) {
-	asprintf(err_msg, "xc_domain_getinfo(%d) failed", vm_id);
-	ret = -EPERM;
-	goto out;
-    }
-    s_vcpu_info.marker = XC_SAVE_ID_VCPU_INFO;
-    s_vcpu_info.max_vcpu_id = dom_info[0].max_vcpu_id;
-    s_vcpu_info.vcpumap = 0ULL;
-    for (j = 0; j <= s_vcpu_info.max_vcpu_id; j++) {
-	ret = xc_vcpu_getinfo(xc_handle, vm_id, j, &vcpu_info);
-	if (ret == 0 && vcpu_info.online)
-	    s_vcpu_info.vcpumap |= 1ULL << j;
-    }
-    APRINTF("vcpus %d online %"PRIx64, s_vcpu_info.max_vcpu_id,
+        ret = xc_domain_getinfo(xc_handle, vm_id, 1, dom_info);
+        if (ret != 1 || dom_info[0].domid != vm_id) {
+            asprintf(err_msg, "xc_domain_getinfo(%d) failed", vm_id);
+            ret = -EPERM;
+            goto out;
+        }
+        s_vcpu_info.marker = XC_SAVE_ID_VCPU_INFO;
+        s_vcpu_info.max_vcpu_id = dom_info[0].max_vcpu_id;
+        s_vcpu_info.vcpumap = 0ULL;
+        for (j = 0; j <= s_vcpu_info.max_vcpu_id; j++) {
+            ret = xc_vcpu_getinfo(xc_handle, vm_id, j, &vcpu_info);
+            if (ret == 0 && vcpu_info.online)
+                s_vcpu_info.vcpumap |= 1ULL << j;
+        }
+        APRINTF("vcpus %d online %"PRIx64, s_vcpu_info.max_vcpu_id,
 	    s_vcpu_info.vcpumap);
-    filebuf_write(f, &s_vcpu_info, sizeof(s_vcpu_info));
+        filebuf_write(f, &s_vcpu_info, sizeof(s_vcpu_info));
 
-    for (nr_hvm_params = 0; nr_hvm_params < ARRAY_SIZE(saved_hvm_params);
-         nr_hvm_params++) {
-        s_hvm_params.params[nr_hvm_params].idx =
-            saved_hvm_params[nr_hvm_params].idx;
-        s_hvm_params.params[nr_hvm_params].data = 0;
-        xc_get_hvm_param(xc_handle, vm_id,
-                         s_hvm_params.params[nr_hvm_params].idx,
-                         &s_hvm_params.params[nr_hvm_params].data);
-        APRINTF("hvm param %s/%d %"PRIx64,
+        for (nr_hvm_params = 0; nr_hvm_params < ARRAY_SIZE(saved_hvm_params);
+             nr_hvm_params++) {
+            s_hvm_params.params[nr_hvm_params].idx =
+                saved_hvm_params[nr_hvm_params].idx;
+            s_hvm_params.params[nr_hvm_params].data = 0;
+            xc_get_hvm_param(xc_handle, vm_id,
+                             s_hvm_params.params[nr_hvm_params].idx,
+                             &s_hvm_params.params[nr_hvm_params].data);
+            APRINTF("hvm param %s/%d %"PRIx64,
                 saved_hvm_params[nr_hvm_params].name,
                 s_hvm_params.params[nr_hvm_params].idx,
                 s_hvm_params.params[nr_hvm_params].data);
+        }
+
+        if (nr_hvm_params) {
+            s_hvm_params.marker = XC_SAVE_ID_HVM_PARAMS;
+            s_hvm_params.size = nr_hvm_params * sizeof(s_hvm_params.params[0]);
+            filebuf_write(f, &s_hvm_params,
+                sizeof(struct xc_save_generic) + s_hvm_params.size);
+        }
     }
 
-    if (nr_hvm_params) {
-        s_hvm_params.marker = XC_SAVE_ID_HVM_PARAMS;
-        s_hvm_params.size = nr_hvm_params * sizeof(s_hvm_params.params[0]);
-	filebuf_write(f, &s_hvm_params,
-                      sizeof(struct xc_save_generic) + s_hvm_params.size);
-    }
-
-    hvm_buf_size = xc_domain_hvm_getcontext(xc_handle, vm_id, 0, 0);
+    hvm_buf_size = vm_get_context(NULL, 0);
     if (hvm_buf_size == -1) {
-	asprintf(err_msg, "xc_domain_hvm_getcontext(0, 0) failed");
+	asprintf(err_msg, "vm_get_context(0, 0) failed");
 	ret = -EPERM;
 	goto out;
     }
@@ -269,10 +299,9 @@ uxenvm_savevm_write_info(struct filebuf *f, uint8_t *dm_state_buf,
     }
 
     s_hvm_context.marker = XC_SAVE_ID_HVM_CONTEXT;
-    s_hvm_context.size = xc_domain_hvm_getcontext(xc_handle, vm_id,
-						  hvm_buf, hvm_buf_size);
+    s_hvm_context.size = vm_get_context(hvm_buf, hvm_buf_size);
     if (s_hvm_context.size == -1) {
-	asprintf(err_msg, "xc_domain_hvm_getcontext(%d) failed", hvm_buf_size);
+	asprintf(err_msg, "vm_get_context(%d) failed", hvm_buf_size);
 	ret = -EPERM;
 	goto out;
     }
@@ -282,7 +311,7 @@ uxenvm_savevm_write_info(struct filebuf *f, uint8_t *dm_state_buf,
 
 #if defined(_WIN32)
     /* "set_introspect_info" should be set for template only (last boot)*/
-    if (strstr(lava_options, "set_introspect_info")) {
+    if (!whpx_enable && strstr(lava_options, "set_introspect_info")) {
         struct guest_introspect_info_t *guest_introspect_info;
         guest_introspect_info = get_guest_introspect_info();
         if (guest_introspect_info) {
@@ -370,12 +399,6 @@ compression_is_cuckoo(void)
 #endif
 }
 
-#ifdef SAVE_CUCKOO_ENABLED
-static int
-save_cuckoo_pages(struct filebuf *f, struct page_fingerprint *hashes,
-                  int n, int simple_mode, char **err_msg);
-#endif
-
 static int
 check_aborted(void)
 {
@@ -390,8 +413,8 @@ check_aborted(void)
     return 0;
 }
 
-static void
-set_abortable(void)
+void
+vm_save_set_abortable(void)
 {
     if (cmpxchg(&vm_save_info.safe_to_abort, 0, 1) == 0)
         check_aborted();
@@ -537,7 +560,7 @@ uxenvm_savevm_write_pages(struct filebuf *f, char **err_msg)
     /* store start of batch file offset, to allow restoring page data
      * without parsing the entire save file */
     vm_save_info.page_batch_offset = filebuf_tell(f);
-    set_abortable();
+    vm_save_set_abortable();
 
     pfn = 0;
     while (pfn < p2m_size && !check_aborted()) {
@@ -1481,7 +1504,7 @@ out:
     return ret;
 }
 
-static int
+int
 save_cuckoo_pages(struct filebuf *f, struct page_fingerprint *hashes,
                   int n, int simple_mode, char **err_msg)
 {
@@ -1549,6 +1572,42 @@ load_cuckoo_pages(struct filebuf *f, int reusing_vm, int simple_mode)
 }
 #endif /* SAVE_CUCKOO_ENABLED */
 
+static int
+load_whpx_memory_data(
+    struct filebuf *f, int restore_mode,
+    struct xc_save_whpx_memory_data *memdata, char **err_msg)
+{
+    int ret;
+    char *template_file = vm_template_file;
+    extern char *vm_loadfile;
+
+    if (restore_mode == VM_RESTORE_CLONE && !template_file)
+        template_file = vm_loadfile;
+
+    debug_printf("load whpx memory, template %s\n", template_file ? template_file : "<none>");
+    if (template_file) {
+        ret = whpx_clone_memory(template_file);
+        if (ret) {
+            asprintf(err_msg, "clone template failed: %d", ret);
+            goto out;
+        }
+        if (!vm_has_template_uuid)
+            vm_has_template_uuid = 1;
+        restore_mode = VM_RESTORE_NORMAL;
+        ret = filebuf_seek(
+            f, memdata->size - sizeof(*memdata),
+            FILEBUF_SEEK_CUR) != -1 ? 0 : -EIO;
+        if (ret) {
+            asprintf(err_msg, "filebuf_seek(load_whpx_memory_data) failed");
+            goto out;
+        }
+    } else
+        ret = whpx_read_memory(f, !memdata->has_page_contents);
+
+out:
+    return ret;
+}
+
 static uint8_t *dm_state_load_buf = NULL;
 static int dm_state_load_size = 0;
 
@@ -1565,7 +1624,7 @@ static int dm_state_load_size = 0;
     } while (0)
 
 #define uxenvm_check_restore_clone(mode) do {                           \
-        if ((mode) == VM_RESTORE_CLONE) {                               \
+        if (!whpx_enable && (mode) == VM_RESTORE_CLONE) {               \
             ret = xc_domain_clone_physmap(xc_handle, vm_id,             \
                                           vm_template_uuid);            \
             if (ret < 0) {                                              \
@@ -1585,6 +1644,7 @@ static int
 uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
 {
     struct xc_save_version_info s_version_info = { };
+    struct xc_save_clock_info s_clock_info = { };
     struct xc_save_tsc_info s_tsc_info = { };
     struct xc_save_vcpu_info s_vcpu_info = { };
     struct xc_save_hvm_params s_hvm_params = { };
@@ -1602,6 +1662,7 @@ uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
 #ifdef SAVE_CUCKOO_ENABLED
     struct xc_save_cuckoo_data s_cuckoo = { };
 #endif
+    struct xc_save_whpx_memory_data s_whpx_memory = { };
     struct immutable_range *immutable_ranges = NULL;
     uint8_t *hvm_buf = NULL;
     uint8_t *zero_bitmap = NULL, *zero_bitmap_compressed = NULL;
@@ -1617,7 +1678,7 @@ uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
     int size;
 
     /* XXX init debug option */
-    if (strstr(uxen_opt_debug, ",uncomptmpl,"))
+    if (!whpx_enable && strstr(uxen_opt_debug, ",uncomptmpl,"))
         populate_compressed = 0;
 
     ret = uxenvm_load_alloc(&pfn_type, &pfn_err, &pfn_info, err_msg);
@@ -1737,6 +1798,14 @@ uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
                 goto out;
             break;
 #endif
+        case XC_SAVE_ID_WHPX_MEMORY_DATA:
+            uxenvm_load_read_struct(f, s_whpx_memory, marker, ret, err_msg, out);
+            uxenvm_check_restore_clone(restore_mode);
+            uxenvm_check_mapcache_init();
+            ret = load_whpx_memory_data(f, restore_mode, &s_whpx_memory, err_msg);
+            if (ret)
+                goto out;
+            break;
         case XC_SAVE_ID_VM_TEMPLATE_FILE:
             uxenvm_load_read_struct(f, s_vm_template_file, marker, ret,
                                     err_msg, out);
@@ -1823,16 +1892,22 @@ uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
                     s_vm_fingerprints.hashes_nr,
                     s_vm_fingerprints.size - sizeof(s_vm_fingerprints));
             break;
+        case XC_SAVE_ID_CLOCK_INFO:
+            /* vm_clock offset */
+            uxenvm_load_read_struct(f, s_clock_info, marker, ret,
+                                    err_msg, out);
+            clock_save_adjust = s_clock_info.adjust_offset;
+            break;
 	default:
             uxenvm_check_restore_clone(restore_mode);
             uxenvm_check_mapcache_init();
             ret = uxenvm_load_batch(f, marker, pfn_type, pfn_err, pfn_info,
                                     &dc, vm_lazy_load, populate_compressed,
                                     err_msg);
-	    if (ret)
-		goto out;
-	    break;
-	}
+            if (ret)
+                goto out;
+            break;
+        }
     }
 #ifdef DECOMPRESS_THREADED
     if (dc.async_op_ctx) {
@@ -1988,8 +2063,13 @@ uxenvm_loadvm_execute(struct filebuf *f, int restore_mode, char **err_msg)
             dmreq_init();
         }
     }
-    if (s_hvm_context.marker == XC_SAVE_ID_HVM_CONTEXT)
-	xc_domain_hvm_setcontext(xc_handle, vm_id, hvm_buf, s_hvm_context.size);
+    if (s_hvm_context.marker == XC_SAVE_ID_HVM_CONTEXT) {
+        ret = vm_set_context(hvm_buf, s_hvm_context.size);
+        if (ret) {
+            asprintf(err_msg, "vm_set_context returned: %d", ret);
+            goto out;
+        }
+    }
 
     /* XXX pae? */
 
@@ -2157,7 +2237,7 @@ vm_save(void)
     int ret;
 
     /* XXX init debug option */
-    if (strstr(uxen_opt_debug, ",compbatch,"))
+    if (!whpx_enable && strstr(uxen_opt_debug, ",compbatch,"))
         vm_save_info.single_page = 0;
     vm_save_info.fingerprint = (!vm_template_file || compression_is_cuckoo());
 
@@ -2222,9 +2302,10 @@ mc_resumevm(Monitor *mon, const dict args)
 int
 vm_process_suspend(xc_dominfo_t *info)
 {
-
-    if (!info->shutdown || info->shutdown_reason != SHUTDOWN_suspend)
-        return 0;
+    if (!whpx_enable) { /* no xc_dominfo_t on whpx */
+        if (!info->shutdown || info->shutdown_reason != SHUTDOWN_suspend)
+            return 0;
+    }
 
     APRINTF("vm is suspended");
 
@@ -2241,6 +2322,13 @@ char *vm_save_file_name(const uuid_t uuid)
     char uuid_str[37];
     uuid_unparse_lower(uuid, uuid_str);
     asprintf(&fn, "%s%s.save", save_file_prefix, uuid_str);
+    return fn;
+}
+
+char *vm_save_file_temp_filename(char *name)
+{
+    char *fn;
+    asprintf(&fn, "%s.temp", name);
     return fn;
 }
 
@@ -2264,7 +2352,13 @@ vm_save_execute(void)
 
     APRINTF("device model saving state: %s", vm_save_info.filename);
 
-    f = filebuf_open(vm_save_info.filename, "wb");
+    if (!vm_save_info.save_via_temp)
+        f = filebuf_open(vm_save_info.filename, "wb");
+    else {
+        char *temp = vm_save_file_temp_filename(vm_save_info.filename);
+        f = filebuf_open(temp, "wb");
+        free(temp);
+    }
     if (f == NULL) {
 	ret = errno;
 	ERRMSG("filebuf_open(%s) failed", vm_save_info.filename);
@@ -2293,7 +2387,9 @@ vm_save_execute(void)
 
     while (!check_aborted()) {
         off_t o = filebuf_tell(f);
-        ret = uxenvm_savevm_write_pages(f, &err_msg);
+        ret = !whpx_enable
+            ? uxenvm_savevm_write_pages(f, &err_msg)
+            : whpx_write_memory(f);
         if (ret && compression_is_cuckoo()) {
             if (ret == -ENOSPC)
                 vm_save_info.compress_mode = VM_SAVE_COMPRESS_LZ4;
@@ -2321,6 +2417,17 @@ vm_save_execute(void)
     if (ret == 0) {
         APRINTF("total file size: %"PRIu64" bytes", (uint64_t)filebuf_tell(f));
         filebuf_flush(f);
+        if (vm_save_info.save_via_temp && !check_aborted()) {
+            filebuf_delete_on_close(f, 0);
+            filebuf_close(f);
+#ifdef _WIN32
+            char *temp = vm_save_file_temp_filename(vm_save_info.filename);
+            if (!MoveFileEx(temp, vm_save_info.filename, MOVEFILE_REPLACE_EXISTING))
+                debug_printf("MoveFile failed: %x\n", (int)GetLastError());
+#endif
+            /* reopen for potential resume */
+            vm_save_info.f = filebuf_open(vm_save_info.filename, "rb");
+        }
     } else {
         if (f)
             filebuf_close(f);
@@ -2343,7 +2450,6 @@ vm_save_execute(void)
 void
 vm_save_finalize(void)
 {
-
     if (vm_save_info.f) {
         if (!vm_quit_interrupt)
             filebuf_delete_on_close(vm_save_info.f, 0);
@@ -2365,6 +2471,7 @@ vm_restore_memory(void)
 #ifdef SAVE_CUCKOO_ENABLED
     struct xc_save_cuckoo_data s_cuckoo;
 #endif
+    struct xc_save_whpx_memory_data s_whpx_memory;
     char *err_msg = NULL;
 #ifdef VERBOSE
     int count = 0;
@@ -2413,6 +2520,12 @@ vm_restore_memory(void)
             ret = load_cuckoo_pages(f, 1, s_cuckoo.simple_mode);
             goto out;
 #endif
+        case XC_SAVE_ID_WHPX_MEMORY_DATA:
+            uxenvm_load_read_struct(f, s_whpx_memory, marker, ret, &err_msg, out);
+            ret = load_whpx_memory_data(f, vm_restore_mode, &s_whpx_memory, &err_msg);
+            if (ret)
+                goto out;
+            break;
         default:
             ret = uxenvm_load_batch(f, marker, pfn_type, pfn_err, pfn_info,
                                     &dc, 0 /* lazy_load */, populate_compressed,
@@ -2478,14 +2591,13 @@ vm_load(const char *name, int restore_mode)
         vm_template_file = strdup(name);
 
   out:
-    if (f)
-	filebuf_close(f);
+    filebuf_close(f);
 
-    if (ret) {
+    if (ret < 0) {
         _set_errno(-ret);
         return -1;
     }
-    return 0;
+    return ret;
 }
 
 int
@@ -2524,7 +2636,9 @@ vm_resume(void)
         vm_save_info.f = NULL;
     }
 
-    ret = xc_domain_resume(xc_handle, vm_id);
+    ret = !whpx_enable
+        ? xc_domain_resume(xc_handle, vm_id)
+        : whpx_vm_resume();
     if (ret) {
         if (!err_msg)
             asprintf(&err_msg, "xc_domain_resume failed");

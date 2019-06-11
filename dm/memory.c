@@ -8,6 +8,7 @@
 #include "iomem.h"
 #include "mapcache.h"
 #include "memory.h"
+#include <dm/whpx/whpx.h>
 
 #include <xenctrl.h>
 
@@ -44,6 +45,12 @@ memcpy_words(void *dst, void *src, size_t n)
         : "+S" (src), "+D" (dst) : "d" (n) : "ecx", "memory" );
 }
 
+static void warn_mmio_access(uint64_t addr, int len, int is_write)
+{
+    if (whpx_enable)
+        debug_printf("UNHANDLED MMIO %s @ %"PRIx64"/%d\n",
+            is_write ? "write" : "read", addr, len);
+}
 void vm_memory_rw(uint64_t addr, uint8_t *buf, 
 		  int len, int is_write)
 {
@@ -85,7 +92,8 @@ void vm_memory_rw(uint64_t addr, uint8_t *buf,
 		    if (xen_logdirty_enabled)
 			xc_hvm_modified_memory(xc_handle, vm_id,
 					       addr >> UXEN_PAGE_SHIFT, 1);
-		}
+		} else
+                    warn_mmio_access(addr, len, is_write);
 	    }
         } else {
 	    if (l >= 4 && ((addr & 3) == 0)) {
@@ -118,6 +126,7 @@ void vm_memory_rw(uint64_t addr, uint8_t *buf,
 		} else {
 		    /* Neither RAM nor known MMIO space */
 		    memset(buf, 0xff, l); 
+                    warn_mmio_access(addr, len, is_write);
 		}
 	    }
         }
@@ -225,11 +234,21 @@ vm_memory_map_perm(uint64_t guest_addr, uint32_t len, int prot)
 	return NULL;
     }
 
-    va = xc_map_foreign_range(xc_handle, vm_id,
-			      (len + UXEN_PAGE_SIZE - 1) & UXEN_PAGE_MASK,
-			      prot, guest_addr >> UXEN_PAGE_SHIFT);
-    if (va == NULL)
-	return NULL;
+    if (!whpx_enable) {
+        va = xc_map_foreign_range(xc_handle, vm_id,
+            (len + UXEN_PAGE_SIZE - 1) & UXEN_PAGE_MASK,
+            prot, guest_addr >> UXEN_PAGE_SHIFT);
+        if (va == NULL)
+            return NULL;
 
-    return va + (guest_addr & ~UXEN_PAGE_MASK);
+        return va + (guest_addr & ~UXEN_PAGE_MASK);
+    } else {
+        uint64_t len_ = len;
+
+        va = whpx_ram_map(guest_addr, &len_);
+        assert(!va || len_ == len);
+
+        return va;
+    }
+
 }

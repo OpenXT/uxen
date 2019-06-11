@@ -302,9 +302,8 @@ DEFINE_XEN_GUEST_HANDLE(xen_add_to_physmap_t);
 #define XENMEM_TRANSLATE_PROT_READ  0x1
 #define XENMEM_TRANSLATE_PROT_WRITE 0x2
 #define XENMEM_TRANSLATE_MAX_BATCH 1024
-#define XENMEM_TRANSLATE_MAP_NOT     0x0
-#define XENMEM_TRANSLATE_MAP_DM      0x1
-#define XENMEM_TRANSLATE_MAP_RELEASE 0x2
+#define XENMEM_TRANSLATE_MAP        0x0
+#define XENMEM_TRANSLATE_RELEASE    0x1
 #define XENMEM_translate_gpfn_list_for_map  48
 struct xen_translate_gpfn_list_for_map {
     domid_t domid;

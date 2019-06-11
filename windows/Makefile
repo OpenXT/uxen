@@ -4,12 +4,12 @@ include $(TOPDIR)/Config.mk
 
 SUBDIRS  =
 SUBDIRS += uxenv4vlib
+SUBDIRS += uxenv4vproxy
 SUBDIRS += uxen.sys
 SUBDIRS += uxenctl
 SUBDIRS += vhd-util
 SUBDIRS += libxc
 SUBDIRS += filecrypt
-SUBDIRS += uxenh264
 SUBDIRS += uxendm
 SUBDIRS += backtrace
 SUBDIRS += build

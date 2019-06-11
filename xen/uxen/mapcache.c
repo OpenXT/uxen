@@ -13,6 +13,7 @@
 #include <xen/sched.h>
 #include <xen/domain_page.h>
 #include <xen/softirq.h>
+#include <xen/cpu.h>
 #include <asm/current.h>
 #include <asm/flushtlb.h>
 #include <asm/mm.h>
@@ -28,7 +29,7 @@ static DEFINE_PER_CPU(uint32_t[MAPCACHE_SIZE / 32], mapcache_map);
 
 #define map_mfn(va, mfn) UI_HOST_CALL(ui_map_mfn, va, mfn)
 
-#define HASH_ENTRIES 64
+#define HASH_ENTRIES 256
 #define HASH_FN(mfn) ((mfn) & (HASH_ENTRIES - 1))
 
 typedef struct hash_entry {
@@ -39,20 +40,52 @@ typedef struct hash_entry {
 static DEFINE_PER_CPU(hash_entry_t[HASH_ENTRIES], mapcache_hash);
 #define SLOT_UNUSED ((uint16_t)-1)
 
-void __init
-mapcache_init(void)
+static void
+mapcache_setup_cpu(unsigned int cpu)
 {
-    int cpu, i;
+    int i;
 
-    for_each_present_cpu(cpu) {
-        printk("%s: cpu %d va %p-%p\n", __FUNCTION__, cpu,
-               (void *)_uxen_info.ui_mapcache_va[cpu],
-               (void *)(_uxen_info.ui_mapcache_va[cpu] +
-                        (_uxen_info.ui_mapcache_size << PAGE_SHIFT)));
-        for (i = 0; i < HASH_ENTRIES; i++)
-            per_cpu(mapcache_hash, cpu)[i].slot = SLOT_UNUSED;
-    }
+    printk("%s: cpu %d va %p-%p\n", __FUNCTION__, cpu,
+           (void *)_uxen_info.ui_mapcache_va[cpu],
+           (void *)(_uxen_info.ui_mapcache_va[cpu] +
+                    (_uxen_info.ui_mapcache_size << PAGE_SHIFT)));
+    for (i = 0; i < HASH_ENTRIES; i++)
+        per_cpu(mapcache_hash, cpu)[i].slot = SLOT_UNUSED;
 }
+
+static int
+mapcache_init_callback(struct notifier_block *nfb, unsigned long action,
+                       void *hcpu)
+{
+    unsigned int cpu = (unsigned long)hcpu;
+    int rc = 0;
+
+    switch (action) {
+    case CPU_UP_PREPARE:
+        mapcache_setup_cpu(cpu);
+        break;
+    default:
+        break;
+    }
+
+    return !rc ? NOTIFY_DONE : notifier_from_errno(rc);
+}
+
+static struct notifier_block mapcache_init_nfb = {
+    .notifier_call = mapcache_init_callback
+};
+
+static int __init
+mapcache_presmp_init(void)
+{
+    register_cpu_notifier(&mapcache_init_nfb);
+
+    ASSERT(smp_processor_id() == 0);
+    mapcache_setup_cpu(0);
+
+    return 0;
+}
+presmp_initcall(mapcache_presmp_init);
 
 void *
 mapcache_map_page(xen_pfn_t mfn)
@@ -62,7 +95,7 @@ mapcache_map_page(xen_pfn_t mfn)
     uintptr_t va;
     struct hash_entry *entry;
 
-    if (AX_ON_AMD_PRESENT() && ax_l1_invlpg_intercept)
+    if (ax_l1_invlpg_intercept)
         return uxen_map_page_global(mfn);
 
     entry = &this_cpu(mapcache_hash)[HASH_FN(mfn)];
@@ -118,7 +151,7 @@ mapcache_unmap_page_va(const void *va)
         goto out;
     }
 
-    mfn = (pte & ~0x8000000000000fff) >> PAGE_SHIFT;
+    mfn = (pte & ~0xffff000000000fff) >> PAGE_SHIFT;
     entry = &this_cpu(mapcache_hash)[HASH_FN(mfn)];
     if (entry->slot == slot) {
         ASSERT(entry->refcnt);
@@ -154,5 +187,5 @@ mapcache_mapped_va_mfn(const void *va)
     pte = map_mfn((uintptr_t)va, ~0ULL);
 
     return (pte & _PAGE_PRESENT) ?
-        (pte & ~0x8000000000000fff) >> PAGE_SHIFT : INVALID_MFN;
+        (pte & ~0xffff000000000fff) >> PAGE_SHIFT : INVALID_MFN;
 }

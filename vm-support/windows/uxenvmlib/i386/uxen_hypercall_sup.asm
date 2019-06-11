@@ -106,7 +106,6 @@ _hypercall5	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD,
 
 _hypercall5	endp
 
-
 	public _hypercall6
 
 _hypercall6	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD, arg4:DWORD, arg5:DWORD, arg6:DWORD
@@ -130,5 +129,108 @@ _hypercall6	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD,
 
 _hypercall6	endp
 
+        ;;  WHPX hypercalls
 
-	end
+	public _whpx_hypercall1
+
+_whpx_hypercall1	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD
+    push ebx
+    mov eax, addr1
+    mov ebx, arg1
+    cpuid
+    pop ebx
+    ret 8
+
+_whpx_hypercall1	endp
+
+
+	public _whpx_hypercall2
+
+_whpx_hypercall2	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD
+    push ebx
+    mov eax, addr1
+    mov ebx, arg1
+    mov ecx, arg2
+    cpuid
+    pop ebx
+    ret 12
+
+_whpx_hypercall2	endp
+
+
+	public _whpx_hypercall3
+
+_whpx_hypercall3	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD
+    push ebx
+    mov eax, addr1
+    mov ebx, arg1
+    mov ecx, arg2
+    mov edx, arg3
+    cpuid
+    pop ebx
+    ret 16
+
+_whpx_hypercall3	endp
+
+	public _whpx_hypercall4
+
+_whpx_hypercall4	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD, arg4:DWORD
+    push esi
+    push ebx
+    mov eax, addr1
+    mov ebx, arg1
+    mov ecx, arg2
+    mov edx, arg3
+    mov esi, arg4
+    cpuid
+    pop ebx
+    pop esi
+    ret 20
+
+_whpx_hypercall4	endp
+
+	public _whpx_hypercall5
+
+_whpx_hypercall5	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD, arg4:DWORD, arg5:DWORD
+    push esi
+    push edi
+    push ebx
+    mov eax, addr1
+    mov ebx, arg1
+    mov ecx, arg2
+    mov edx, arg3
+    mov esi, arg4
+    mov edi, arg5
+    cpuid
+    pop ebx
+    pop edi
+    pop esi
+    ret 24
+
+_whpx_hypercall5	endp
+
+        public _whpx_hypercall6
+
+_whpx_hypercall6	proc NEAR STDCALL, addr1:DWORD, arg1:DWORD, arg2:DWORD, arg3: DWORD, arg4:DWORD, arg5:DWORD, arg6:DWORD
+    push esi
+    push edi
+    push ebx
+    push ebp
+    mov eax, addr1
+    mov ebx, arg1
+    mov ecx, arg2
+    mov edx, arg3
+    mov esi, arg4
+    mov edi, arg5
+    mov ebp, arg6
+    cpuid
+    pop ebp
+    pop ebx
+    pop edi
+    pop esi
+    ret 28
+
+_whpx_hypercall6 endp
+
+    end
+

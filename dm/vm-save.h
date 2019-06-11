@@ -23,6 +23,7 @@ struct vm_save_info {
     int awaiting_suspend;
     int save_requested;
     int save_abort;
+    int save_via_temp;
     int safe_to_abort;
     ioh_event save_abort_event;
 
@@ -50,6 +51,7 @@ struct vm_save_info {
 extern struct vm_save_info vm_save_info;
 
 void vm_save(void);
+void vm_save_set_abortable(void);
 void vm_save_abort(void);
 struct xc_dominfo;
 int vm_process_suspend(struct xc_dominfo *info);
@@ -64,5 +66,13 @@ int vm_load(const char *, int);
 int vm_load_finish(void);
 
 int vm_lazy_load_page(uint32_t gpfn, uint8_t *va, int compressed);
+
+#ifdef SAVE_CUCKOO_ENABLED
+struct page_fingerprint;
+
+int
+save_cuckoo_pages(struct filebuf *f, struct page_fingerprint *hashes,
+                  int n, int simple_mode, char **err_msg);
+#endif
 
 #endif	/* _VM_SAVE_H_ */

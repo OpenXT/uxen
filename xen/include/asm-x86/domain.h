@@ -253,7 +253,8 @@ struct pv_domain
 #define P2M_DOMAIN_SIZE                                     \
     (208 + 4 * sizeof(void *) + 2 * sizeof(mfn_t) +         \
      sizeof(uint16_t) + /* align */ 3 * sizeof(uint16_t) +  \
-     sizeof(struct dspage_store *) + sizeof(struct timer))
+     sizeof(struct dspage_store *) + sizeof(struct timer) + \
+     30 /* GC_SCRUB_DELAY */ * sizeof(uint32_t))
 #define P2M_DOMAIN_SIZE_P2M_L1_CACHE (sizeof(uint16_t))
 #ifndef NDEBUG
 #define P2M_DOMAIN_SIZE_DEBUG_EXTRA (sizeof(unsigned long))
@@ -361,7 +362,6 @@ struct arch_domain
         RELMEM_l2,
 #endif  /* __UXEN__ */
         RELMEM_foreign_pages,
-        RELMEM_mapcache,
         RELMEM_done,
     } relmem;
 #ifndef __UXEN__
@@ -502,14 +502,18 @@ struct arch_vcpu
 
     /* other state */
 
+#ifndef __UXEN__
     struct pae_l3_cache pae_l3_cache;
+#endif  /* __UXEN__ */
 
     unsigned long      flags; /* TF_ */
 
+#ifndef __UXEN__
     void (*schedule_tail) (struct vcpu *);
 
     void (*ctxt_switch_from) (struct vcpu *);
     void (*ctxt_switch_to) (struct vcpu *);
+#endif  /* __UXEN__ */
 
     /* Virtual Machine Extensions */
     union {

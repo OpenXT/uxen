@@ -16,6 +16,7 @@ typedef struct Clock {
 } Clock;
 
 extern int64_t time_pause_adjust;
+extern int64_t clock_save_adjust;
 
 int64_t _os_get_clock(int);	/* in ns */
 int64_t _os_get_clock_ms(int);

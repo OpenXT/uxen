@@ -9,6 +9,8 @@
 #include "ax_private.h"
 
 int ax_present = 0;
+int ax_present_intel = 0;
+int ax_present_amd = 0;
 int ax_pv_ept = 0;
 int ax_l1_invlpg_intercept = 0;
 int ax_has_pv_vmcs = 0;
@@ -16,6 +18,9 @@ int ax_pv_vmcs_enabled = 0;
 
 extern int ax_pv_vmread(void *, uint64_t field, uint64_t *value);
 extern int ax_pv_vmwrite(void *, uint64_t field, uint64_t value);
+
+typedef int (*pvi_vmread_pfn)(void *, uint64_t field, uint64_t *value);
+typedef int (*pvi_vmwrite_pfn)(void *, uint64_t field, uint64_t value);
 
 static DEFINE_PER_CPU_READ_MOSTLY (void *, ax_pv_vmcs_ctx);
 
@@ -152,10 +157,17 @@ unsigned long ax_pv_vmcs_read(unsigned long field)
 {
     uint64_t value;
 
-    if (ax_pv_vmcs_enabled)
-        ax_pv_vmread(this_cpu(ax_pv_vmcs_ctx), field, &value);
-    else
+    if (ax_pv_vmcs_enabled) {
+#ifdef __x86_64__
+        if (_uxen_info.ui_pvi_vmread)
+            ((pvi_vmread_pfn)((intptr_t)_uxen_info.ui_pvi_vmread))
+             (this_cpu(ax_pv_vmcs_ctx), field, &value);
+        else
+#endif  /* __x86_64__ */
+            ax_pv_vmread(this_cpu(ax_pv_vmcs_ctx), field, &value);
+    } else {
         vmread(field, &value);
+    }
 
     return value;
 }
@@ -165,20 +177,34 @@ unsigned long ax_pv_vmcs_read_safe(unsigned long field, int *error)
 {
     uint64_t value;
 
-    if (ax_pv_vmcs_enabled)
-        *error = ax_pv_vmread(this_cpu(ax_pv_vmcs_ctx), field, &value);
-    else
+    if (ax_pv_vmcs_enabled) {
+#ifdef __x86_64__
+        if (_uxen_info.ui_pvi_vmread)
+            *error = ((pvi_vmread_pfn)((intptr_t)_uxen_info.ui_pvi_vmread))
+                (this_cpu(ax_pv_vmcs_ctx), field, &value);
+        else
+#endif  /* __x86_64__ */
+            *error = ax_pv_vmread(this_cpu(ax_pv_vmcs_ctx), field, &value);
+    } else {
         *error = vmread(field, &value);
+    }
 
     return value;
 }
 
 void ax_pv_vmcs_write(unsigned long field, unsigned long value)
 {
-    if (ax_pv_vmcs_enabled)
-        ax_pv_vmwrite(this_cpu(ax_pv_vmcs_ctx), field, value);
-    else
+    if (ax_pv_vmcs_enabled) {
+#ifdef __x86_64__
+        if (_uxen_info.ui_pvi_vmwrite)
+            ((pvi_vmwrite_pfn)((intptr_t)_uxen_info.ui_pvi_vmwrite))
+                (this_cpu(ax_pv_vmcs_ctx), field, value);
+        else
+#endif  /* __x86_64__ */
+            ax_pv_vmwrite(this_cpu(ax_pv_vmcs_ctx), field, value);
+    } else {
         vmwrite(field, value);
+    }
 }
 
 int ax_setup(void)
@@ -214,9 +240,11 @@ int ax_setup(void)
 
 
     if (cpu_is_intel) {
+        ax_present_intel = 1;
         ax_has_pv_vmcs = !! (AX_FEATURES_AX_PV_VMCS);
         printk("AX has PV VMCS %d\n", ax_has_pv_vmcs);
     } else {
+        ax_present_amd = 1;
         rax = AX_CPUID_VMCB_CHECK_MY;
         rbx = 0;
         rcx = 0;
@@ -224,6 +252,8 @@ int ax_setup(void)
         hv_tests_cpuid(&rax, &rbx, &rcx, &rdx);
         ax_l1_invlpg_intercept = !!(rdx & AX_CPUID_VMCB_CHECK_INTERCEPT_INVLPG);
         printk("L1 intercepts INVLPG: %s\n", ax_l1_invlpg_intercept ? "YES" : "NO");
+        vmexec_fpu_ctxt_switch = 1;
+        uxen_info->host_os_is_xmm_clean = 1;
     }
 #endif
 
@@ -240,7 +270,11 @@ int ax_pv_vmcs_setup(void)
     rax = AX_CPUID_PV_VMACCESS;
     rbx = 1;
 
-    if (!patched) {
+    if (!patched
+#ifdef __x86_64__
+        && !(_uxen_info.ui_pvi_vmread && _uxen_info.ui_pvi_vmwrite)
+#endif  /* __x86_64__ */
+        ) {
         rcx = (size_t) ax_pv_vmread;
         rdx = (size_t) ax_pv_vmwrite;
     } else {

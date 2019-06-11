@@ -34,6 +34,8 @@
 #define UXEN_POOL_TAG 'uxen'
 #define UXEN_MAPPING_TAG 'nexu'
 
+#define UXEN_PATH_MAX_LEN 512
+
 /* Windows timers are set in 100ns units, ie 10,000,000Hz. */
 #define UXEN_HOST_TIMER_FREQUENCY 10000000
 
@@ -115,8 +117,6 @@ struct vm_info {
      * defined content */
     uxen_pfn_t vmi_undefined_mfn;
 
-    struct fd_assoc *vmi_mdm_fda;
-
     struct uxen_logging_buffer_desc vmi_logging_desc;
 
     struct vm_vcpu_info vmi_vcpus[];
@@ -152,6 +152,14 @@ struct device_extension {
     LONG volatile de_executing;
     KEVENT de_resume_event;
     KEVENT de_suspend_event;
+
+    WCHAR _de_uxen_path[UXEN_PATH_MAX_LEN];
+    UNICODE_STRING de_uxen_path;
+
+#if defined(__x86_64__)
+    UINT_PTR de_pvi_vmread;
+    UINT_PTR de_pvi_vmwrite;
+#endif /* __x86_64__ */
 };
 
 struct host_event_channel {
@@ -174,6 +182,8 @@ extern struct device_extension *uxen_devext;
 extern DRIVER_OBJECT *uxen_drvobj;
 extern uint8_t *uxen_hv;
 extern size_t uxen_size;
+extern int uxen_whp;
+
 affinity_t uxen_lock(void);
 void uxen_unlock(affinity_t);
 affinity_t uxen_exec_dom0_start(void);
@@ -242,8 +252,6 @@ extern void uxen_cpu_unpin(affinity_t);
 extern affinity_t uxen_cpu_pin_vcpu(struct vm_vcpu_info *, int);
 extern void uxen_cpu_unpin_vcpu(struct vm_vcpu_info *, affinity_t);
 extern int uxen_cpu_set_active_mask(void *);
-extern void __cdecl uxen_cpu_on_selected(const void *,
-                                         uintptr_t (*)(uintptr_t));
 extern int pv_vmware(void);
 #define UXEN_CPU_VENDOR_UNKNOWN 0
 #define UXEN_CPU_VENDOR_INTEL 1
@@ -274,11 +282,7 @@ int copyout(const void *kaddr, void *uaddr, size_t size);
 int copyin_kernel(const void *uaddr, void *kaddr, size_t size);
 
 /* uxen_load.c */
-#if !defined(__UXEN_EMBEDDED__)
-int uxen_load(struct uxen_load_desc *);
-#else
 int uxen_load_symbols(void);
-#endif
 int uxen_unload(void);
 
 /* uxen_mem.c */
@@ -286,7 +290,7 @@ int uxen_unload(void);
 extern uint64_t max_hidden_mem;
 #endif /* __i386__ */
 extern int map_page_range_max_nr;
-uint64_t __cdecl map_mfn(uintptr_t va, xen_pfn_t mfn);
+uint64_t map_mfn(uintptr_t va, xen_pfn_t mfn);
 int mem_init(void);
 int mem_late_init(void);
 void mem_exit(void);
@@ -361,18 +365,8 @@ void user_free(void *va, enum user_mapping_type, struct fd_assoc *);
 void user_free_all_user_mappings(struct fd_assoc *);
 int uxen_mem_malloc(struct uxen_malloc_desc *, struct fd_assoc *);
 int uxen_mem_free(struct uxen_free_desc *, struct fd_assoc *);
-uint64_t __cdecl uxen_mem_user_access_ok(void *, void *, uint64_t);
 int uxen_mem_mmapbatch(struct uxen_mmapbatch_desc *, struct fd_assoc *);
 int uxen_mem_munmap(struct uxen_munmap_desc *, struct fd_assoc *);
-void * __cdecl uxen_mem_map_page(xen_pfn_t);
-uint64_t __cdecl uxen_mem_unmap_page_va(const void *);
-void * __cdecl uxen_mem_map_page_range(struct vm_vcpu_info_shared *, uint64_t,
-                                       uxen_pfn_t *);
-uint64_t __cdecl uxen_mem_unmap_page_range(
-    struct vm_vcpu_info_shared *, const void *, uint64_t, uxen_pfn_t *);
-uxen_pfn_t __cdecl uxen_mem_mapped_va_pfn(const void *);
-void __cdecl uxen_mem_fill_free_pages(void);
-void __cdecl uxen_mem_clear_free_pages(void);
 void uxen_mem_tlb_flush(void);
 uxen_pfn_t get_max_pfn(int use_hidden);
 #ifdef __i386__
@@ -389,6 +383,9 @@ extern uxen_pfn_t vframes_start, vframes_end;
 ULONG_PTR __stdcall uxen_mem_tlb_flush_fn(ULONG_PTR arg);
 ULONG_PTR __stdcall uxen_mem_tlb_flush_fn_global(ULONG_PTR arg);
 uintptr_t __stdcall read_paging_base(void);
+#ifndef __i386__
+void __stdcall ax_vars_cpuid(uint64_t *rax, uint64_t *rbx, uint64_t *rcx, uint64_t *rdx);
+#endif /* __i386__ */
 
 /* uxen_ops.c */
 extern MDL *map_page_range_mdl;
@@ -447,13 +444,9 @@ int uxen_op_map_host_pages(struct uxen_map_host_pages_desc *,
                            struct fd_assoc *);
 int uxen_op_unmap_host_pages(struct uxen_map_host_pages_desc *,
                              struct fd_assoc *);
+int test_ax_pv_vmcs(void);
 
-/* memcache-dm.c */
-int mdm_init(struct uxen_memcacheinit_desc *, struct fd_assoc *);
-int mdm_map(struct uxen_memcachemap_desc *, struct fd_assoc *);
-void mdm_clear_all(struct vm_info *);
-
-#if defined(__x86_64__) && defined(__UXEN_EMBEDDED__)
+#if defined(__x86_64__)
 /* uxen_xpdata.obj */
 extern uint8_t uxen_xdata_start;
 extern uint8_t uxen_xdata_end;
@@ -470,11 +463,16 @@ extern void uxen_cpu_xmm_restore_guest(void *);
 /* v4v.c */
 void uxen_sys_start_v4v(void);
 void uxen_sys_stop_v4v(void);
-void __cdecl uxen_sys_signal_v4v(void);
-void __cdecl uxen_sys_set_v4v_thread_priority(LONG priority);
+void uxen_sys_set_v4v_thread_priority(LONG priority);
 
 /* uxen_stackwalk.c */
 extern void uxen_stacktrace(PCONTEXT);
+
+/* pvl2.c */
+#ifndef __i386__
+extern int pvi_load_driver(struct device_extension *);
+extern void pvi_unload_driver(void);
+#endif /* __i386__ */
 
 static __inline int
 ffs(uint32_t i)
@@ -501,6 +499,11 @@ ffs(uint32_t i)
 #define atomic_add(val, ptr) \
     InterlockedAdd(ptr, val)
 
+#ifdef memcmp
+#undef memcmp
+#endif
+#define memcmp(s1, s2, len) (RtlCompareMemory(s1, s2, len) != len)
+
 #if defined(__x86_64__)
 #define affinity_mask(x) ((ULONGLONG)1 << (x))
 #else
@@ -515,5 +518,10 @@ ffs(uint32_t i)
 #define BUILD_BUG_ON(condition) ((void)sizeof(struct { int:-(int)!!(condition); }))
 
 #define ASSERT_IRQL(irql) (ASSERT(KeGetCurrentIrql() <= (irql)))
+
+DECLSPEC_IMPORT void uxen_v4vlib_init_driver_hook(PDRIVER_OBJECT pdo);
+DECLSPEC_IMPORT void uxen_v4vlib_free_driver_unhook(void );
+DECLSPEC_IMPORT void uxen_v4vproxy_init_driver_hook(PDRIVER_OBJECT pdo);
+DECLSPEC_IMPORT void uxen_v4vproxy_free_driver_unhook(void );
 
 #endif  /* _UXEN_H_ */

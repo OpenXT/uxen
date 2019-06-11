@@ -175,10 +175,9 @@ v4v_signal_domain(struct domain *d)
     if (!d->v4v)  /* This can happen if the domain is being destroyed */
         return;
 
-    if (deliver_via_upcall(d)) {
-        if (uxen_info->ui_signal_v4v)
-            UI_HOST_CALL(ui_signal_v4v);
-    } else {
+    if (deliver_via_upcall(d))
+        UI_HOST_CALL(ui_signal_v4v);
+    else {
 #if 0
         hvm_pci_intx_assert(d, V4V_PCI_SLOT, V4V_PCI_INTX);
         hvm_pci_intx_deassert(d, V4V_PCI_SLOT, V4V_PCI_INTX);
@@ -1858,6 +1857,7 @@ do_v4v_op(int cmd, XEN_GUEST_HANDLE(void) arg1,
         return -EPERM;
 
     domain_lock(d);
+    hvmcopy_cache_enable(1);
     switch (cmd) {
     case V4VOP_register_ring: {
         XEN_GUEST_HANDLE(v4v_ring_t) ring_hnd =
@@ -1995,6 +1995,8 @@ do_v4v_op(int cmd, XEN_GUEST_HANDLE(void) arg1,
         break;
     }
 out:
+    hvmcopy_cache_enable(0);
+    hvmcopy_cache_flush();
     domain_unlock(d);
 #ifdef V4V_DEBUG
     printk(XENLOG_ERR "<-do_v4v_op()=%d\n", (int)rc);

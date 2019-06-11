@@ -9,7 +9,8 @@
 
 typedef struct _DEVICE_EXTENSION {
     WDFDEVICE Device;
-    WDFINTERRUPT            Interrupt;
+    WDFINTERRUPT Interrupt;
+    uxen_v4v_ring_handle_t *EchoRing;
 }  DEVICE_EXTENSION, *PDEVICE_EXTENSION;
 
 

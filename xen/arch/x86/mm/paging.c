@@ -322,6 +322,7 @@ paging_mark_dirty_check_vram_l2(struct vcpu *v, unsigned long gfn)
     p2m_access_t p2ma;
     struct p2m_domain *p2m;
     unsigned long gfn_l2;
+    int need_sync;
 
     if (!paging_mode_log_dirty(d) || !dirty_vram ||
         gfn < dirty_vram->begin_pfn || gfn >= dirty_vram->end_pfn)
@@ -342,7 +343,8 @@ paging_mark_dirty_check_vram_l2(struct vcpu *v, unsigned long gfn)
     }
 
     /* ro->rw transition - no need to sync */
-    p2m->ro_update_l2_entry(p2m, gfn_l2, 0, NULL);
+    need_sync = 0;
+    p2m->ro_update_l2_entry(p2m, gfn_l2, 0, &need_sync);
 
     if (dirty_vram->want_events) {
         dirty_vram->want_events = 0;
@@ -822,6 +824,12 @@ int paging_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
 /* Call when destroying a domain */
 void paging_teardown(struct domain *d)
 {
+    struct p2m_domain *p2m = p2m_get_hostp2m(d);
+
+    p2m_lock_recursive(p2m);
+    p2m->is_alive = 0;
+    p2m_unlock(p2m);
+
     if ( hap_enabled(d) )
         hap_teardown(d);
 #ifndef __UXEN__
@@ -837,15 +845,19 @@ void paging_teardown(struct domain *d)
     p2m_pod_empty_cache(d);
 #endif  /* __UXEN__ */
 
-    p2m_teardown_compressed(p2m_get_hostp2m(d));
+    p2m_teardown_compressed(p2m);
 
-    if (!p2m_shared_teardown(p2m_get_hostp2m(d)))
+    if (!p2m_shared_teardown(p2m))
         gdprintk(XENLOG_ERR, "%s: p2m_shared_teardown failed\n", __FUNCTION__);
 }
 
 /* Call once all of the references to the domain have gone away */
 void paging_final_teardown(struct domain *d)
 {
+
+    if (is_template_domain(d))
+        kill_timer(&p2m_get_hostp2m(d)->template.gc_timer);
+
     if ( hap_enabled(d) )
         hap_final_teardown(d);
 #ifndef __UXEN__
@@ -951,10 +963,9 @@ void paging_update_nestedmode(struct vcpu *v)
         /* TODO: shadow-on-shadow */
         v->arch.paging.nestedmode = NULL;
 }
-#endif  /* __UXEN__ */
 
 void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
-                            l1_pgentry_t *p, mfn_t table_mfn,
+                            l1_pgentry_t *p,
                             l1_pgentry_t new, unsigned int level)
 {
     struct domain *d = p2m->domain;
@@ -963,12 +974,12 @@ void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
         v = d->vcpu ? d->vcpu[0] : NULL;
     if ( likely(v && paging_mode_enabled(d) && paging_get_hostmode(v) != NULL) )
     {
-        return paging_get_hostmode(v)->write_p2m_entry(v, gfn, p, table_mfn,
-                                                       new, level);
+        return paging_get_hostmode(v)->write_p2m_entry(v, gfn, p, new, level);
     }
     else
         safe_write_pte(p, new);
 }
+#endif  /* __UXEN__ */
 
 /*
  * Local variables:

@@ -78,6 +78,7 @@ config_load(const char *name)
     buf[sbuf.st_size] = 0;
 
     cf->config_buf = buf;
+    debug_printf("config file %s:\n%s\n", name, buf);
 
     errbuf[0] = 0;
     cf->parser_obj = yajl_tree_parse(cf->config_buf, errbuf, sizeof(errbuf));
@@ -744,6 +745,9 @@ struct config_option config_options[] = {
     { "firmware", co_set_firmware, NULL },
     { "guest_drivers_logmask", co_set_integer_opt, &guest_drivers_logmask },
     { "h264-offload", co_set_boolean_opt, &h264_offload },
+    { "hbmon-period", co_set_integer_opt, &hbmon_period },
+    { "hbmon-timeout-period", co_set_integer_opt, &hbmon_timeout_period },
+    { "hbmon-verbose", co_set_boolean_opt, &hbmon_verbose },
 #ifdef _WIN32
     { "hid-touch", co_set_boolean_opt, &hid_touch_enabled },
 #else
@@ -784,11 +788,9 @@ struct config_option config_options[] = {
     { "seed-generation", co_set_boolean_opt, &seed_generation },
     { "serial", co_set_serial, NULL },
     { "shared-folders", co_set_shared_folders, NULL },
-    { "simple-map-size", co_set_integer_opt, &simple_map_size },
     { "surf-copy-reduction", co_set_boolean_opt, &surf_copy_reduction },
     { "timer-mode", co_set_integer_opt, &vm_timer_mode },
     { "tsc-mode", co_set_integer_opt, &vm_tsc_mode },
-    { "use-simple-mapping", co_set_integer_opt, &use_simple_mapping },
     { "use-v4v-disk", co_set_integer_opt, &vm_use_v4v_disk },
     { "use-v4v-net", co_set_integer_opt, &vm_use_v4v_net },
     { "uuid", co_set_uuid, NULL },
@@ -804,6 +806,11 @@ struct config_option config_options[] = {
     { "vpt-align", co_set_boolean_opt, &vm_vpt_align },
     { "vpt-coalesce-period", co_set_integer_opt, &vm_vpt_coalesce_period },
     { "vram-dirty-tracking", co_set_boolean_opt, &vm_vram_dirty_tracking },
+    { "vram-refresh-delay", co_set_integer_opt, &vm_vram_refresh_delay },
+    { "vram-refresh-period", co_set_integer_opt, &vm_vram_refresh_delay },
+    { "whpx", co_set_boolean_opt, &whpx_enable },
+    { "whpx-perf-stats", co_set_boolean_opt, &whpx_perf_stats },
+    { "whpx-reftsc", co_set_boolean_opt, &whpx_reftsc },
     { "zero-page", co_set_boolean_opt, &vm_zero_page },
     { "zero-page-setup", co_set_boolean_opt, &vm_zero_page_setup },
 };

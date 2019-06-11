@@ -868,8 +868,12 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE(void) arg)
             return rc;
         }
 
-        if (d->clone_of &&
-            !(d->clone_of == pd /*&& p2m_get_hostp2m(d)->clone_gpfn*/))
+        if (p2m_get_hostp2m(d)->is_alive)
+            rc = -EINVAL;
+        else if (d->clone_of &&
+                 !(d->clone_of == pd &&
+                   p2m_get_hostp2m(d)->clone_gpfn <=
+                   p2m_get_hostp2m(pd)->max_mapped_pfn))
             rc = -EINVAL;
         else if (d->clone_of == pd || get_domain(pd)) {
             d->clone_of = pd;

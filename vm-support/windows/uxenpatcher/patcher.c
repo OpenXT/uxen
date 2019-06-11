@@ -650,6 +650,8 @@ static int get_base_leaf(void)
 
         if (!strcmp(cpu_info.signature, "uXenisnotXen"))
             break;
+        if (!strcmp(cpu_info.signature, "WhpxisnotXen"))
+            break;
     }
 
     if (leaf >= 0x40010000 || (cpu_info.eax - leaf) < 2)

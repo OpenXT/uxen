@@ -22,6 +22,7 @@ DM_CONFIG_DUMP_MEMORY_STAT ?= yes
 DM_CONFIG_DUMP_SWAP_STAT ?= yes
 
 COMMONINCLUDEDIR = $(TOPDIR)/common/include
+LIBWINHVDIR = $(TOPDIR)/dm
 LIBELFDIR = $(TOPDIR)/xen/common/libelf
 LIBELFDIR_include = $(TOPDIR)/common/include/xen-public
 LZ4DIR = $(TOPDIR)/common/lz4
@@ -69,7 +70,7 @@ $(filter no_,$(DM_CONFIG_DUMP_SWAP_STAT))DM_CFLAGS += \
 DM_SRCS =
 # on OSX constructor functions are invoked in linking order, therefore
 # this needs to be first to setup logging
-$(OSX)DM_SRCS += osx-logging.o
+$(OSX)DM_SRCS += osx-logging.c
 DM_SRCS += aio.c
 DM_SRCS += async-op.c
 DM_SRCS += base64.c
@@ -89,8 +90,10 @@ DM_SRCS += conffile.c
 $(WINDOWS)DM_SRCS += console-win32.c
 console-win32.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 console-win32.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
-console-win32.o: CPPFLAGS += -I$(TOPDIR)/common/uxenconsole
 $(CONFIG_VBOXDRV)console-win32.o: CPPFLAGS += -DNOTIFY_CLIPBOARD_SERVICE
+$(WINDOWS)DM_SRCS += console-dr.c
+console-dr.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+console-dr.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 $(OSX)DM_SRCS += console-osx.m
 console-osx.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 console-osx.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
@@ -99,7 +102,7 @@ console-remote.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 console-remote.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 console-remote.o: CPPFLAGS += -I$(TOPDIR)/common/uxenconsole
 $(CONFIG_VBOXDRV)console-remote.o: CPPFLAGS += -DNOTIFY_CLIPBOARD_SERVICE
-$(UXENDM_VNCSERVER)DM_SRCS += console-vnc.o
+$(UXENDM_VNCSERVER)DM_SRCS += console-vnc.c
 console-vnc.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 console-vnc.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 console-vnc.o: CPPFLAGS += $(LIBVNCSERVER_CPPFLAGS)
@@ -133,6 +136,9 @@ DM_SRCS += firmware.c
 $(WINDOWS)DM_SRCS += guest-agent.c
 guest-agent.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 guest-agent.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
+$(WINDOWS)DM_SRCS += hbmon.c
+hbmon.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+hbmon.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 DM_SRCS += nickel/http-parser/http_parser.c
 DM_SRCS += input.c
 DM_SRCS += introspection.c
@@ -151,9 +157,12 @@ DM_SRCS += iovec.c
 DM_SRCS += ipc.c
 DM_SRCS += lib.c
 $(WINDOWS)DM_SRCS += malloc-wrappers.c
-DM_SRCS += mapcache-memcache.c
-mapcache-memcache.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
-mapcache-memcache.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
+#DM_SRCS += mapcache-memcache.c
+#mapcache-memcache.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+#mapcache-memcache.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
+DM_SRCS += mapcache-lru.c
+mapcache-lru.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+mapcache-lru.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 DM_SRCS += memory.c
 memory.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 DM_SRCS += memory-virt.c
@@ -172,6 +181,8 @@ $(CONFIG_VBOXDRV)shared-folders.o: CFLAGS += \
 $(CONFIG_VBOXDRV)shared-folders.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 $(CONFIG_VBOXDRV)shared-folders.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 $(CONFIG_VBOXDRV)DM_SRCS += clipboard.c
+$(CONFIG_VBOXDRV)clipboard.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+$(CONFIG_VBOXDRV)clipboard.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
 $(CONFIG_VBOXDRV)DM_SRCS += clipboard-protocol.c
 $(CONFIG_VBOXDRV)clipboard-protocol.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
 $(CONFIG_VBOXDRV)clipboard-protocol.o: CPPFLAGS += $(LIBUXENCTL_CPPFLAGS)
@@ -258,6 +269,32 @@ $(WINDOWS)DM_SRCS += hw/uxen_v4v_win32.c
 hw_uxen_v4v_win32.o: CPPFLAGS += -I$(XENPUBLICDIR)
 $(OSX)DM_SRCS += hw/uxen_v4v_osx.c
 hw_uxen_v4v_osx.o: CPPFLAGS += -I$(XENPUBLICDIR)
+
+$(WINDOWS)DM_SRCS += whpx/whpx.c
+whpx_whpx.o: CPPFLAGS += -I$(XENPUBLICDIR)
+whpx_whpx.o: CPPFLAGS += -I$(XENDIR_include)
+$(WINDOWS)DM_SRCS += whpx/core.c
+$(WINDOWS)DM_SRCS += whpx/v4v.c
+whpx_v4v.o: CPPFLAGS += -I$(XENPUBLICDIR)
+$(WINDOWS)DM_SRCS += whpx/v4v-whpx.c
+whpx_v4v-whpx.o: CPPFLAGS += -I$(XENPUBLICDIR)
+$(WINDOWS)DM_SRCS += whpx/v4v-proxy.c
+whpx_v4v-proxy.o: CPPFLAGS += -I$(XENPUBLICDIR)
+$(WINDOWS)DM_SRCS += whpx/memory.c
+whpx_memory.o: CPPFLAGS += $(LIBXC_CPPFLAGS)
+whpx_memory.o: CPPFLAGS += $(CUCKOO_CPPFLAGS)
+$(WINDOWS)DM_SRCS += whpx/irq.c
+$(WINDOWS)DM_SRCS += whpx/loader.c
+whpx_loader.o: CPPFLAGS += -I$(LIBELF_CPPFLAGS)
+$(WINDOWS)DM_SRCS += whpx/x86_emulate.c
+$(WINDOWS)DM_SRCS += whpx/emulate.c
+$(WINDOWS)DM_SRCS += whpx/util.c
+$(WINDOWS)DM_SRCS += whpx/i8259.c
+$(WINDOWS)DM_SRCS += whpx/i8254.c
+$(WINDOWS)DM_SRCS += whpx/ioapic.c
+$(WINDOWS)DM_SRCS += whpx/mc146818rtc.c
+$(WINDOWS)DM_SRCS += whpx/hpet.c
+$(WINDOWS)DM_SRCS += whpx/viridian.c
 
 QEMU_CFLAGS += -I$(TOPDIR)
 
@@ -394,7 +431,6 @@ $(WINDOWS)LDLIBS += -ldxguid
 $(WINDOWS)LDLIBS += -lgdi32
 $(WINDOWS)LDLIBS += -lgdiplus
 $(WINDOWS)$(CONFIG_FILECRYPT)LDLIBS += $(LIBFILECRYPT_LIBS)
-$(WINDOWS)LDLIBS += $(LIBUXENCONSOLE_LIBS)
 
 $(OSX)LDLIBS += -framework AppKit
 $(OSX)LDLIBS += -framework Carbon
@@ -482,6 +518,10 @@ block-swap_%.o: block-swap/%.c
 
 hw_%.o: hw/%.c
 	$(_W)echo Compiling - $(subst hw_,hw/,$@)
+	$(_V)$(COMPILE.c) $(EXTRA_CFLAGS) $(DM_CFLAGS) -c $< -o $@
+
+whpx_%.o: whpx/%.c
+	$(_W)echo Compiling - $(subst whpx_,whpx/,$@)
 	$(_V)$(COMPILE.c) $(EXTRA_CFLAGS) $(DM_CFLAGS) -c $< -o $@
 
 $(LIBELF_OBJS): CFLAGS += $(LIBELF_CFLAGS)

@@ -51,14 +51,6 @@
 #define call_with_abi(fn, narg)                 \
         call fn
 #define ABI_ENTRY(fn, narg) ENTRY(fn)
-#ifdef GS_info_offset
-#define call_via_uxen_info(fn, reg)             \
-        mov %gs:GS_info_offset, reg;            \
-        call *UI_ ## fn(reg)
-#else /* GS_info_offset */
-#define call_via_uxen_info(fn, reg)             \
-        fn
-#endif /* GS_info_offset */
 #elif defined(__i386__)
 #define r(reg) %e##reg
 #define UREGS_r(_r) UREGS_e ## _r
@@ -67,15 +59,6 @@
 #define call_with_abi(fn, narg)                 \
         call LABEL(@fn@narg)
 #define ABI_ENTRY(fn, narg) ENTRY(@fn@narg)
-#ifdef FS_info_offset
-#define call_via_uxen_info(fn, reg)             \
-        mov %fs:FS_info_offset, reg;            \
-        call *UI_ ## fn(reg)
-#else
-/* XXX simplified version for cli/sti */
-#define call_via_uxen_info(fn, reg)             \
-        fn
-#endif
 #endif
 
 #define call_with_regs(cur, fn, narg)           \
@@ -240,13 +223,14 @@ ABI_ENTRY(vmx_asm_do_vmentry, SIZEOF_REG)
 #endif  /* __UXEN__ */
 
         get_current(r(bx))
-        call_via_uxen_info(cli, r_arg)
+        cli
 
         mov  r(bx), r_arg
         call_with_abi(check_work_vcpu, SIZEOF_REG)
 
         /* check_work_vcpu returns with 1 if work was done.
-	 * Note: interrupts have been re-enabled in that case. */
+	 * Note: interrupts have been re-enabled in that case.
+	 * See vmexec_irq_enable(). */
         test %eax, %eax
         jne  .Lret_from_vmx_asm_do_vmentry
 
@@ -320,7 +304,7 @@ UNLIKELY_END(realmode)
         jmp .Lret_from_vmx_asm_do_vmentry
 
 .Lvmx_goto_emulator:
-        call_via_uxen_info(sti, r(ax))
+        sti
         call_with_regs(r(bx), vmx_realmode, SIZEOF_REG)
 
 .Lret_from_vmx_asm_do_vmentry:

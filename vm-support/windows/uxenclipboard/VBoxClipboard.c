@@ -22,7 +22,7 @@
 #include "channel.h"
 #include "clipboardformats.h"
 #include "uxen_bmp_convert.h"
-#include <dm/clipboard-protocol.h>
+#include "proto.h"
 #include "../common/debug-user.h"
 
 typedef struct _VBOXCLIPBOARDCONTEXT

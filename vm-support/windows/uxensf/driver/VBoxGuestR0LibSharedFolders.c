@@ -57,10 +57,14 @@
 # define RtlZeroMemory(a, b) memset (a, 0, b)
 #endif
 
+void hgcmcall_init(void);
+void hgcmcall_cleanup(void);
 
 DECLVBGL(int) vboxInit (void)
 {
     int rc = VINF_SUCCESS;
+
+    hgcmcall_init();
 
     rc = VbglInit ();
     return rc;
@@ -69,6 +73,8 @@ DECLVBGL(int) vboxInit (void)
 DECLVBGL(void) vboxUninit (void)
 {
     VbglTerminate ();
+
+    hgcmcall_cleanup();
 }
 
 DECLVBGL(int) vboxConnect (PVBSFCLIENT pClient)

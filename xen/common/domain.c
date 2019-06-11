@@ -39,7 +39,6 @@
 #include <xsm/xsm.h>
 #include <xen/trace.h>
 #include <xen/tmem.h>
-#include <uxen/memcache-dm.h>
 
 #ifndef __UXEN__
 /* Linux config option: propageted to domain0 */
@@ -291,6 +290,8 @@ struct domain *domain_create_internal(
 #endif  /* NDEBUG */
 
     d->domain_id = domid;
+    if (domid < DOMID_FIRST_RESERVED)
+        domain_array[domid] = d;
 
     lock_profile_register_struct(LOCKPROF_TYPE_PERDOM, d, domid, "Domain");
 
@@ -410,9 +411,6 @@ struct domain *domain_create_internal(
             goto fail;
         init_status |= INIT_v4v;
 
-        if (domid < DOMID_FIRST_RESERVED)
-            domain_array[domid] = d;
-
         spin_lock(&domlist_update_lock);
         pd = &domain_list; /* NB. domain_list maintained in order of domid. */
         for ( pd = &domain_list; *pd != NULL; pd = &(*pd)->next_in_list )
@@ -460,6 +458,8 @@ struct domain *domain_create_internal(
     if ( init_status & INIT_xsm )
         xsm_free_security_domain(d);
 #endif  /* __UXEN_NOT_YET__ */
+    if (domid < DOMID_FIRST_RESERVED)
+        domain_array[domid] = NULL;
     free_cpumask_var(d->domain_dirty_cpumask);
     free_domain_struct(d);
     return NULL;
@@ -1093,8 +1093,6 @@ static void complete_domain_destroy(struct rcu_head *head)
     /* Free page used by xen oprofile buffer. */
     free_xenoprof_pages(d);
 #endif  /* __UXEN__ */
-
-    mdm_destroy_vm(d);
 
     for ( i = d->max_vcpus - 1; i >= 0; i-- )
         if ( (v = d->vcpu[i]) != NULL )

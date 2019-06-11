@@ -20,10 +20,10 @@ OUTDIR_uxensf := $(OBJDIR_uxensf)/driver/$(OBJDIR_ddk)
 OUTDIR_mrxnp32 := $(OBJDIR_uxensf)/dll/$(OBJDIR_ddk_32)
 
 .PHONY: all
-all: $(OUTDIR_mrxnp32)/VBoxMRXNP.dll $(OUTDIR_uxensf)/uxensf.sys
+all: $(OUTDIR_mrxnp32)/uxenMRXNP.dll $(OUTDIR_uxensf)/uxensf.sys
 
 # NOTE: no space after set foo=xxx since cmd otherwise includes the space in foo
-.PHONY: $(OUTDIR_uxensf)/uxensf.sys $(OUTDIR_mrxnp32)/VBoxMRXNP.dll
+.PHONY: $(OUTDIR_uxensf)/uxensf.sys $(OUTDIR_mrxnp32)/uxenMRXNP.dll
 $(OUTDIR_uxensf)/uxensf.sys: $(OBJDIR_uxensf)/build_info.h
 	@mkdir -p $(@D)
 	$(_W)echo WinDDK build $@
@@ -31,12 +31,12 @@ $(OUTDIR_uxensf)/uxensf.sys: $(OBJDIR_uxensf)/build_info.h
 	$(_W)echo Signing - $@
 	$(_V)cmd //c $(UXEN_WINDOWS_SIGN) $@ || { rm -f $@; false; }
 
-.PHONY: $(OUTDIR_uxensf)/VBoxMRXNP.dll
-$(OUTDIR_uxensf)/VBoxMRXNP.dll: $(OUTDIR_uxensf)/VBoxMRXNP.dll
+.PHONY: $(OUTDIR_uxensf)/uxenMRXNP.dll
+$(OUTDIR_uxensf)/uxenMRXNP.dll: $(OUTDIR_uxensf)/uxenMRXNP.dll
 	$(_W)echo Signing - $@
 	$(_V)cmd //c $(UXEN_WINDOWS_SIGN) $(call dospath, $@) || { rm -f $@; false; }
 
-$(OUTDIR_mrxnp32)/VBoxMRXNP.dll:
+$(OUTDIR_mrxnp32)/uxenMRXNP.dll:
 	@mkdir -p $(@D)
 	$(_W)echo WinDDK i386 build $@
 	$(_V)cmd /c "set MAKEFLAGS=& $(SET_STAMPINF_DATE) $(WINDDK_DIR)\bin\setenv.bat $(WINDDK_DIR)\ $(DDKENV) $(UXEN_TARGET_VM_SUPPORT_ARCH_NAME_32_BIT) $(UXEN_TARGET_VM_SUPPORT_OS) no_oacr & cd /D $$(pwd -W)/dll & $(SET_OBJECT_ROOT) $(WINDDK_BUILD) -cZ -jpath $(call dospath,$(OBJDIR_uxensf)/dll)"
@@ -57,9 +57,9 @@ $(OBJDIR_uxensf)/build_info.h:
 INSTALL_FILES = uxensf.sys
 INSTALL_FILES += uxensf.inf
 INSTALL_FILES += uxensf.pdb
-INSTALL_FILES += VBoxMRXNP.dll
+INSTALL_FILES += uxenMRXNP.dll
 INSTALL_FILES += install.bat
-# also install VBoxMRXNP32.dll, but this does not play well with patsubst
+# also install uxenMRXNP32.dll, but this does not play well with patsubst
 
 INSTALL_DIR = $(DISTDIR_VM_SUPPORT)/uxensf
 
@@ -72,11 +72,11 @@ $(patsubst %,install_%,$(INSTALL_FILES)): install_%: $(OUTDIR_uxensf)/%
 	$(_W)echo Installing -- $(<F)
 	$(_V)$(call install_data,$(<),$(INSTALL_DIR))
 
-install_VBoxMRXNP32.dll: $(OUTDIR_mrxnp32)/VBoxMRXNP.dll
-	$(_W)echo Installing -- VBoxMRXNP32.dll
-	$(_V)$(call install_data,$(<),$(INSTALL_DIR)/VBoxMRXNP32.dll)
+install_uxenMRXNP32.dll: $(OUTDIR_mrxnp32)/uxenMRXNP.dll
+	$(_W)echo Installing -- uxenMRXNP32.dll
+	$(_V)$(call install_data,$(<),$(INSTALL_DIR)/uxenMRXNP32.dll)
 
-dist: $(patsubst %,install_%,$(INSTALL_FILES)) install_VBoxMRXNP32.dll
+dist: $(patsubst %,install_%,$(INSTALL_FILES)) install_uxenMRXNP32.dll
 
 clean::
 	@$(if $(BUILDDIR),rm -rf $(BUILDDIR),:)

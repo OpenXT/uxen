@@ -72,6 +72,7 @@ struct WaitObjects {
     int queue_len;
 #endif
     uintptr_t interrupt;
+    critical_section lock;
 };
 
 typedef struct IOHandlerRecord {

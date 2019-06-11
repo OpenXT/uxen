@@ -68,6 +68,8 @@ extern unsigned long pci_mem_start, pci_mem_end;
 
 extern unsigned long scratch_start;
 
+extern int whp_present, uxen_present;
+
 #endif /* __HVMLOADER_CONFIG_H__ */
 
 /*

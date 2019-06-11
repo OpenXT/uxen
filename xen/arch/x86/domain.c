@@ -59,7 +59,6 @@
 #ifdef CONFIG_COMPAT
 #include <compat/vcpu.h>
 #endif
-#include <uxen/memcache-dm.h>
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 DEFINE_PER_CPU(unsigned long, cr4);
@@ -219,7 +218,8 @@ struct domain *alloc_domain_struct(void)
 void free_domain_struct(struct domain *d)
 {
     lock_profile_deregister_struct(LOCKPROF_TYPE_PERDOM, d);
-    domain_array[d->domain_id] = NULL;
+    if (d->domain_id < DOMID_FIRST_RESERVED)
+        domain_array[d->domain_id] = NULL;
     free_xenheap_page(d->extra_1);
     free_xenheap_page(d);
 }
@@ -437,9 +437,9 @@ int vcpu_initialise(struct vcpu *v)
         }
     }
 #endif
-#endif  /* __UXEN__ */
 
     pae_l3_cache_init(&v->arch.pae_l3_cache);
+#endif  /* __UXEN__ */
 
     paging_vcpu_init(v);
 
@@ -552,6 +552,18 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
         is_hvm_domain(d) &&
         hvm_funcs.hap_supported &&
         (domcr_flags & DOMCRF_hap);
+    if (!hap_enabled(d) &&
+        d->domain_id && d->domain_id < DOMID_FIRST_RESERVED) {
+        printk(XENLOG_ERR "%s: vm%u: VM without hap "
+               "(is %shvm domain, hap %ssupported, DOMCRF_hap %sset)\n",
+               __FUNCTION__, d->domain_id,
+               is_hvm_domain(d) ? "" : "not ",
+               hvm_funcs.hap_supported ? "" : "not ",
+               (domcr_flags & DOMCRF_hap) ? "" : "not ");
+        rc = -EINVAL;
+        goto fail;
+    }
+
     d->arch.hvm_domain.mem_sharing_enabled = 0;
 
     d->arch.s3_integrity = !!(domcr_flags & DOMCRF_s3_integrity);
@@ -2292,7 +2304,6 @@ static void vcpu_destroy_pagetables(struct vcpu *v)
 
 int domain_relinquish_resources(struct domain *d)
 {
-    int ret;
     struct vcpu *v;
 
     BUG_ON(!cpumask_empty(d->domain_dirty_cpumask));
@@ -2382,14 +2393,6 @@ int domain_relinquish_resources(struct domain *d)
     case RELMEM_foreign_pages:
         if (d->host_pages)
             return -EAGAIN;
-
-        d->arch.relmem = RELMEM_mapcache;
-        /* fallthrough */
-
-    case RELMEM_mapcache:
-        ret = mdm_clear_vm(d);
-        if (ret)
-            return ret;
 
 #endif  /* __UXEN__ */
         d->arch.relmem = RELMEM_done;
@@ -2514,7 +2517,7 @@ __initcall(init_vcpu_kick_softirq);
 
 static void vcpu_sync_tsc_softirq(struct vcpu *v)
 {
-    hvm_funcs.set_tsc_offset(v, v->arch.hvm_vcpu.cache_tsc_offset);
+    HVM_FUNCS(set_tsc_offset, v, v->arch.hvm_vcpu.cache_tsc_offset);
 }
 
 static int __init init_vcpu_tsc_softirq(void)

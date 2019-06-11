@@ -55,8 +55,16 @@ V4V_DLL_EXPORT void uxen_v4vlib_init_driver(PDRIVER_OBJECT pdo)
     if (driver_object) return;
     driver_object = pdo;
 
+    gh_dispatch_init(driver_object);
+}
+
+V4V_DLL_EXPORT void uxen_v4vlib_start_device(void)
+{
+    if (!driver_object) return;
+
     gh_create_device(driver_object);
 }
+
 
 V4V_DLL_DECL void uxen_v4vlib_set_thread_priority(LONG priority)
 {

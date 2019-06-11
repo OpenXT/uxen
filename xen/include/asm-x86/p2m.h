@@ -356,16 +356,23 @@ struct p2m_domain {
                                        unsigned int *page_order);
     mfn_t              (*parse_entry)(void *table, unsigned long index,
                                       p2m_type_t *t, p2m_access_t* a);
+    int                (*write_entry)(struct p2m_domain *p2m, void *table,
+                                      unsigned long gfn, mfn_t mfn, int target,
+                                      p2m_type_t p2mt, p2m_access_t p2ma,
+                                      int *needs_sync);
     int                (*split_super_page_one)(struct p2m_domain *p2m,
-                                               void *entry, int order);
+                                               void *entry, unsigned long gpfn,
+                                               int order);
     void               (*change_entry_type_global)(struct p2m_domain *p2m,
                                                    p2m_type_t ot,
                                                    p2m_type_t nt);
     
+#ifndef __UXEN__
     void               (*write_p2m_entry)(struct p2m_domain *p2m,
                                           unsigned long gfn, l1_pgentry_t *p,
-                                          mfn_t table_mfn, l1_pgentry_t new,
+                                          l1_pgentry_t new,
                                           unsigned int level);
+#endif  /* __UXEN__ */
 
     int                (*ro_update_l2_entry)(struct p2m_domain *p2m,
                                              unsigned long gfn, int read_only,
@@ -380,6 +387,11 @@ struct p2m_domain {
      * pause domain.  Otherwise, remove access restrictions. */
     bool_t       access_required;
 
+    bool_t virgin;
+
+    /* controls whether asynchronous operations on the p2m are allowed */
+    bool_t is_alive;
+
     /* Highest guest frame that's ever been mapped in the p2m */
     unsigned long max_mapped_pfn;
 
@@ -390,16 +402,18 @@ struct p2m_domain {
 
     struct dspage_store *dsps;
 
-    int virgin;
-    
-    int is_dying;
-
     union {
         struct {
-            unsigned long gc_decompressed_gpfn;
+            uint32_t gc_decompressed_gpfn;
+#define GC_SCRUB_DELAY 30
+            uint32_t gc_scrub_gpfn[GC_SCRUB_DELAY];
+            struct timer gc_timer;
+            short gc_per_iter;
+            short gc_scrub_index;
+            bool_t gc_was_preempted;
         } template;
     };
- 
+
 #ifndef NDEBUG
     unsigned long compress_gpfn;
 #endif  /* NDEBUG */
@@ -502,6 +516,10 @@ static inline unsigned long mfn_to_gfn(struct domain *d, mfn_t mfn)
 /* Init the datastructures for later use by the p2m code */
 int p2m_init(struct domain *d);
 
+/* Mark p2m table alive -- this controls from when asynchronous
+ * operations on the p2m are allowed */
+int p2m_alive(struct domain *d);
+
 /* Allocate a new p2m table for a domain. 
  *
  * Returns 0 for success or -errno. */
@@ -592,6 +610,11 @@ p2m_pod_offline_or_broken_hit(struct page_info *p);
 /* Replace pod cache when offline/broken page triggered */
 void
 p2m_pod_offline_or_broken_replace(struct page_info *p);
+
+/* Clone one l1 table in p2m */
+int
+p2m_clone_l1(struct p2m_domain *op2m, struct p2m_domain *p2m,
+             unsigned long gpfn, void *entry, int needs_sync);
 
 /* Clone p2m */
 int
@@ -788,15 +811,17 @@ void p2m_flush(struct vcpu *v, struct p2m_domain *p2m);
 /* Flushes all nested p2m tables */
 void p2m_flush_nestedp2m(struct domain *d);
 
+#ifndef __UXEN_NOT_YET__
 void nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
     l1_pgentry_t *p, mfn_t table_mfn, l1_pgentry_t new, unsigned int level);
+#endif  /* __UXEN_NOT_YET__ */
 
 int
 p2m_clear_gpfn_from_mapcache(struct p2m_domain *p2m, unsigned long gfn,
                              mfn_t mfn);
 
 int
-p2m_translate(struct domain *d, xen_pfn_t *arr, int nr, int write, int map);
+p2m_translate(struct domain *d, xen_pfn_t *arr, int nr, int write);
 
 #define NPT_TABLE_ORDER 9
 #define NPT_PAGETABLE_ENTRIES 512

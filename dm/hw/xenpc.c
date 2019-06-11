@@ -8,6 +8,9 @@
 #include <dm/hw.h>
 #include <dm/firmware.h>
 
+#include <dm/whpx/whpx.h>
+#include <dm/whpx/hpet.h>
+
 #include "xenpc.h"
 #include "xenrtc.h"
 
@@ -19,6 +22,19 @@ const char *serial_devices[MAX_SERIAL_PORTS] = { NULL, };
 CharDriverState *serial_hds[MAX_SERIAL_PORTS];
 
 static ISADevice *rtc = NULL;
+
+ISADevice *rtc_init(int base_year, qemu_irq intercept_irq);
+
+void rtc_set_memory(ISADevice *dev, int addr, int val)
+{
+    extern void uxen_rtc_set_memory(ISADevice *dev, int addr, int val);
+    extern void qemu_rtc_set_memory(ISADevice *dev, int addr, int val);
+
+    if (!whpx_enable)
+        uxen_rtc_set_memory(dev, addr, val);
+    else
+        qemu_rtc_set_memory(dev, addr, val);
+}
 
 /* BIOS debug ports and APM power control */
 
@@ -67,13 +83,15 @@ bios_ioport_write(void *opaque, uint32_t addr, uint32_t val)
 static void
 bios_ioport_deprecated_write(void *opaque, uint32_t addr, uint32_t data)
 {
-    debug_printf("bios deprecated write at %x val %x\n", addr, data);
+    if (!whpx_enable)
+        debug_printf("bios deprecated write at %x val %x\n", addr, data);
 }
 
 static uint32_t
 bios_ioport_deprecated_read(void *opaque, uint32_t addr)
 {
-    debug_printf("bios deprecated read at %x\n", addr);
+    if (!whpx_enable)
+        debug_printf("bios deprecated read at %x\n", addr);
     return 0xffffffff;
 }
 
@@ -262,6 +280,7 @@ pc_init_xen(void)
     int nr_ide = 0;
     DriveInfo *hd_ich[MAX_ICH_DEVS];
     int nr_ich = 0;
+    qemu_irq rtc_irq = NULL;
 #ifdef HAS_AUDIO
     const char *m;
 #endif
@@ -276,8 +295,8 @@ pc_init_xen(void)
 
     bios_ioport_init();
 
-    pic = xen_interrupt_controller_init();
-
+    pic = !whpx_enable ? xen_interrupt_controller_init()
+                       : whpx_interrupt_controller_init();
     pci_bus = i440fx_init(&i440fx_state, &piix3_devfn, pic,
                           system_iomem, system_ioport, ram_size,
                           below_4g_mem_size,
@@ -302,8 +321,11 @@ pc_init_xen(void)
     if (rc < 0)
         errx(1, "Error: Initialization failed for pass-through devices");
 #endif
-        
-    rtc = isa_create_simple("xenrtc");
+
+    if (whpx_enable && vm_hpet)
+        hpet_init(pic, &rtc_irq);
+    rtc = !whpx_enable ? isa_create_simple("xenrtc")
+                       : rtc_init(2000, rtc_irq);
 
     process_config_devices();
 
@@ -384,6 +406,7 @@ pc_init_xen(void)
         tpm_tis_init(&isa_get_irq(11));
 #endif
 
+    //FIXME
 #ifndef __APPLE__
     int uxenhid_create_devices(void);
     uxenhid_create_devices();

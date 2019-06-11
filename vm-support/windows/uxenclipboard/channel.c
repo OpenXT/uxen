@@ -1,6 +1,6 @@
 #include "channel.h"
 #include <windows.h>
-#include <dm/clipboard-protocol.h>
+#include "proto.h"
 #include <iprt/err.h>
 #include <xen/v4v.h>
 

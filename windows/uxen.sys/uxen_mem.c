@@ -161,32 +161,6 @@ set_linear_pt_va(void)
 }
 #endif  /* _WIN64 */
 
-#ifdef _WIN64
-static uint64_t
-set_pte_mfn_only(uintptr_t va, xen_pfn_t mfn)
-{
-    volatile uint64_t *pteaddr = VA_TO_LINEAR_PTE(va);
-    uint64_t old ,new;
-
-    new = old = *pteaddr;
-
-    if (mfn == ~0ULL || mfn == 0ULL) {
-        new &= ~(uint64_t)1; /* mask out the present bit */
-    } else {
-        new &= 0xfff0000000000fffULL; /* mask out the old mfn */
-        new |= 1; /* set the present bit */
-        new |= ((uint64_t)mfn) << PAGE_SHIFT;
-    }
-
-    *pteaddr = new;
-
-    if (!(old & 1)) 
-        old = 0;
-
-    return old;
-}
-#endif
-
 static uint64_t
 set_pte(uintptr_t va, uint64_t new)
 {
@@ -218,14 +192,17 @@ set_pte(uintptr_t va, uint64_t new)
 
 static uint64_t map_mfn_pte_flags = 0;
 
-uint64_t __cdecl
+uint64_t
 map_mfn(uintptr_t va, xen_pfn_t mfn)
 {
-#ifdef _WIN64
-    /* For user mapped pages we'll only change the MFN and nothing else */
-    if (!(va & (1ULL << 63)))
-        return set_pte_mfn_only(va, mfn);
-#endif
+
+    return set_pte(va, (mfn == ~0ULL || mfn == 0ULL) ? mfn :
+                   (((uint64_t)mfn << PAGE_SHIFT) | map_mfn_pte_flags));
+}
+
+uint64_t __cdecl
+ui_map_mfn(uintptr_t va, xen_pfn_t mfn)
+{
 
     return set_pte(va, (mfn == ~0ULL || mfn == 0ULL) ? mfn :
                    (((uint64_t)mfn << PAGE_SHIFT) | map_mfn_pte_flags));
@@ -1659,7 +1636,7 @@ release_user_mapping_range(xen_pfn_t *mfns, uint32_t num,
         umemopa.translate_gpfn_list_for_map.gpfns_start = 0;
         umemopa.translate_gpfn_list_for_map.gpfns_end = n;
         umemopa.translate_gpfn_list_for_map.map_mode =
-            XENMEM_TRANSLATE_MAP_RELEASE;
+            XENMEM_TRANSLATE_RELEASE;
         set_xen_guest_handle(umemopa.translate_gpfn_list_for_map.mfn_list,
                              &mfns[done]);
         _ret = (int)uxen_dom0_hypercall(
@@ -1980,7 +1957,7 @@ uxen_mem_free(struct uxen_free_desc *ufd, struct fd_assoc *fda)
 }
 
 uint64_t __cdecl
-uxen_mem_user_access_ok(void *_umi, void *addr, uint64_t size)
+ui_user_access_ok(void *_umi, void *addr, uint64_t size)
 {
     struct user_mapping_info *umi = (struct user_mapping_info *)_umi;
     struct user_mapping *um;
@@ -2090,8 +2067,7 @@ uxen_mem_mmapbatch(struct uxen_mmapbatch_desc *ummapbd, struct fd_assoc *fda)
 	}
 	umemopa.translate_gpfn_list_for_map.gpfns_start = 0;
 	umemopa.translate_gpfn_list_for_map.gpfns_end = n;
-	umemopa.translate_gpfn_list_for_map.map_mode =
-	    XENMEM_TRANSLATE_MAP_NOT;
+	umemopa.translate_gpfn_list_for_map.map_mode = XENMEM_TRANSLATE_MAP;
         ret = copyin(&ummapbd->umd_arr[done], gpfns, n * sizeof(gpfns[0]));
         if (ret) {
             fail_msg("copyin failed: %d/%d/%d", done, n, ummapbd->umd_num);
@@ -2171,7 +2147,7 @@ uxen_mem_munmap(struct uxen_munmap_desc *umd, struct fd_assoc *fda)
 }
 
 void * __cdecl
-uxen_mem_map_page(xen_pfn_t mfn)
+ui_map_page_global(xen_pfn_t mfn)
 {
     void *va;
 
@@ -2192,15 +2168,15 @@ uxen_mem_map_page(xen_pfn_t mfn)
 }
 
 uint64_t __cdecl
-uxen_mem_unmap_page_va(const void *va)
+ui_unmap_page_global_va(const void *va)
 {
 
     return pagemap_unmap_page_va(va);
 }
 
 void * __cdecl
-uxen_mem_map_page_range(struct vm_vcpu_info_shared *vcis, uint64_t n,
-                        uxen_pfn_t *mfn)
+ui_map_page_range(struct vm_vcpu_info_shared *vcis, uint64_t n,
+                  uxen_pfn_t *mfn)
 {
     struct vm_vcpu_info *vci = (struct vm_vcpu_info *)vcis;
     struct vm_info *vmi = (struct vm_info *)((uintptr_t)vcis & PAGE_MASK);
@@ -2230,8 +2206,8 @@ uxen_mem_map_page_range(struct vm_vcpu_info_shared *vcis, uint64_t n,
 }
 
 uint64_t __cdecl
-uxen_mem_unmap_page_range(struct vm_vcpu_info_shared *vcis, const void *va,
-                          uint64_t n, uxen_pfn_t *mfn)
+ui_unmap_page_range(struct vm_vcpu_info_shared *vcis, const void *va,
+                    uint64_t n, uxen_pfn_t *mfn)
 {
     uint64_t ret;
 
@@ -2247,7 +2223,7 @@ uxen_mem_unmap_page_range(struct vm_vcpu_info_shared *vcis, const void *va,
 }
 
 uxen_pfn_t __cdecl
-uxen_mem_mapped_va_pfn(const void *va)
+ui_mapped_global_va_pfn(const void *va)
 {
     PHYSICAL_ADDRESS pa;
     uxen_pfn_t ret;

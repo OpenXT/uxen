@@ -23,7 +23,7 @@ struct uxen_logging_buffer_desc {
     int npages;
     uint32_t size;
 };
-#define UXEN_LOGGING_BUFFER_DESC_INITIALIZER { NULL, NULL, NULL, 0, 0 }
+#define UXEN_LOGGING_BUFFER_DESC_INITIALIZER { NULL, NULL, NULL, 0, NULL, 0, 0 }
 
 struct uxen_logging_mapping_desc {
     struct uxen_logging_buffer_desc *buffer_desc;

@@ -8,6 +8,7 @@ ifeq (,$(MAKENOW))
 
 VPATH = $(SRCDIR)
 
+CPPFLAGS += -I$(TOPDIR) -I$(TOPDIR)/common/include/xen-public
 CPPFLAGS += -I$(TOPDIR)/windows/include -I.
 LDFLAGS +=
 LDLIBS += -lwtsapi32 -luserenv -ladvapi32 -lpsapi -lsetupapi

@@ -17,4 +17,24 @@ typedef struct v4v_context {
     BOOLEAN notify_pending;
 } v4v_context_t;
 
+typedef struct whpx_v4v_async {
+    /* can be signalled via event */
+    ioh_event ev;
+    /* or callback + opaque */
+    void (*cb)(void*);
+    void *cb_opaque;
+
+    size_t bytes;
+    int completed, cancelled;
+} whpx_v4v_async_t;
+
+typedef struct v4v_async {
+    v4v_context_t *context;
+    union {
+        OVERLAPPED ov;
+        whpx_v4v_async_t whpx;
+    };
+} v4v_async_t;
+
+
 #endif

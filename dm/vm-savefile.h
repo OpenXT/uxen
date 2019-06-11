@@ -23,6 +23,8 @@
 #define XC_SAVE_ID_FINGERPRINTS       -22
 #define XC_SAVE_ID_CUCKOO_DATA        -23
 #define XC_SAVE_ID_HVM_PARAMS         -24
+#define XC_SAVE_ID_CLOCK_INFO         -25
+#define XC_SAVE_ID_WHPX_MEMORY_DATA   -26
 
 #define MAX_BATCH_SIZE 1023
 
@@ -130,6 +132,18 @@ struct PACKED xc_save_index {
 struct xc_save_cuckoo_data {
     int32_t marker;
     int32_t simple_mode;
+    uint8_t data[];
+};
+
+struct xc_save_clock_info {
+    int32_t marker;
+    int64_t adjust_offset;
+};
+
+struct xc_save_whpx_memory_data {
+    int32_t marker;
+    uint32_t size;
+    uint32_t has_page_contents;
     uint8_t data[];
 };
 

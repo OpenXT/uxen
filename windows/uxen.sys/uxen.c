@@ -22,10 +22,6 @@ DRIVER_DISPATCH uxen_close;
 __drv_dispatchType(IRP_MJ_CLEANUP)
 DRIVER_DISPATCH uxen_cleanup;
 
-DECLSPEC_IMPORT void uxen_v4vlib_init_driver_hook(PDRIVER_OBJECT pdo);
-DECLSPEC_IMPORT void uxen_v4vlib_free_driver_unhook(void );
-
-
 struct device_extension *uxen_devext = NULL;
 DRIVER_OBJECT *uxen_drvobj = NULL;
 
@@ -33,6 +29,7 @@ static KGUARDED_MUTEX uxen_mutex;
 
 uint8_t *uxen_hv = NULL;
 size_t uxen_size = 0;
+int uxen_whp = 0;
 
 #include <initguid.h>
 //
@@ -234,15 +231,14 @@ reg_read_str(PUNICODE_STRING key_name, PWSTR val_name,
 }
 
 static
-void print_uxen_drv_info(PUNICODE_STRING reg_path, char *caller)
+void get_uxen_drv_info(PUNICODE_STRING reg_path, PUNICODE_STRING uxen_path, char *caller)
 {
-    DECLARE_UNICODE_STRING_SIZE(uxen_path, 512);
     CHAR tmp[512];
 
     if (NT_SUCCESS(RtlStringCbPrintfA(tmp, sizeof(tmp), "%wZ", reg_path))) {
         printk("%s: reg: %s\n", caller, tmp);
-        if (!NT_ERROR(reg_read_str(reg_path, L"ImagePath", &uxen_path)) &&
-            NT_SUCCESS(RtlStringCbPrintfA(tmp, sizeof(tmp), "%wZ", &uxen_path)))
+        if (!NT_ERROR(reg_read_str(reg_path, L"ImagePath", uxen_path)) &&
+            NT_SUCCESS(RtlStringCbPrintfA(tmp, sizeof(tmp), "%wZ", uxen_path)))
             printk("%s: bin: %s\n", caller, tmp);
     } else
         printk("%s\n", caller);
@@ -259,6 +255,7 @@ uxen_driver_unload(__in PDRIVER_OBJECT DriverObject)
 
     /* We need to unhook first so that DeviceObject only contains one */
     /* thing */
+    uxen_v4vproxy_free_driver_unhook();
     uxen_v4vlib_free_driver_unhook();
 
     devobj = DriverObject->DeviceObject;
@@ -287,6 +284,11 @@ uxen_driver_unload(__in PDRIVER_OBJECT DriverObject)
     (void)RtlInitUnicodeString(&devicename_dos, UXEN_DEVICE_PATH_DOS_U);
     IoDeleteSymbolicLink(&devicename_dos);
     IoDeleteDevice(devobj);
+
+#ifndef __i386__
+    if (!test_ax_pv_vmcs())
+        pvi_unload_driver();
+#endif /* __i386__ */
 
     dprintk("uxen_driver_unload done\n");
 
@@ -374,6 +376,7 @@ uxen_driver_load(__in PDRIVER_OBJECT DriverObject,
     DriverObject->DriverUnload = uxen_driver_unload;
 
     uxen_v4vlib_init_driver_hook(DriverObject);
+    uxen_v4vproxy_init_driver_hook(DriverObject);
 
     /* register for power state changes. */
 
@@ -436,7 +439,9 @@ uxen_driver_load(__in PDRIVER_OBJECT DriverObject,
         goto out;
     }
 
-    print_uxen_drv_info(RegistryPath, "uxen_driver_load");
+    devext->de_uxen_path.Buffer = devext->_de_uxen_path;
+    devext->de_uxen_path.MaximumLength = UXEN_PATH_MAX_LEN * sizeof(WCHAR);
+    get_uxen_drv_info(RegistryPath, &devext->de_uxen_path, "uxen_driver_load");
 
     rb_tree_init(&uxen_devext->de_vm_info_rbtree, &vm_info_rbtree_ops);
 
@@ -452,6 +457,11 @@ uxen_driver_load(__in PDRIVER_OBJECT DriverObject,
                       FALSE);
     KeInitializeEvent(&uxen_devext->de_suspend_event, NotificationEvent,
                       FALSE);
+
+#if defined(__x86_64__)
+    if (!test_ax_pv_vmcs() && pvi_load_driver(uxen_devext))
+        fail_msg("WARNING: pvi_load_driver() failed - carrying on");
+#endif /* __x86_64__ */
 
   out:
     dprintk("uxen_driver_load done\n");
@@ -471,6 +481,7 @@ uxen_driver_load(__in PDRIVER_OBJECT DriverObject,
         }
         IoDeleteSymbolicLink(&devicename_dos);
         IoDeleteDevice(devobj);
+        uxen_v4vproxy_free_driver_unhook();
         uxen_v4vlib_free_driver_unhook();
     }
 

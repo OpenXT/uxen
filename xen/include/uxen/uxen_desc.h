@@ -110,19 +110,6 @@ struct uxen_destroyvm_desc {
     xen_domain_handle_t udd_vmuuid;
 };
 
-struct uxen_memcacheinit_desc {
-    UXEN_PTR(uint8_t, va);
-    UXEN_PTR(volatile uint32_t, pfn_to_entry);
-    uint32_t end_low_gpfn;
-    uint32_t start_high_gpfn;
-    uint32_t end_high_gpfn;
-};
-
-struct uxen_memcachemap_desc {
-    uint32_t pfn;
-    uint32_t nr_pfn;
-};
-
 struct uxen_queryvm_desc {
     xen_domain_handle_t uqd_vmuuid;
     domid_t uqd_domid;
@@ -227,7 +214,9 @@ struct uxen_init_desc {
     uint64_t opt_spec_ctrl;
 #     define UXEN_INIT_opt_spec_ctrl			(1ULL << 28)
 #     define UXEN_INIT_opt_spec_ctrl_MASK		mask0
-
+    uint64_t opt_whp;
+#     define UXEN_INIT_opt_whp       			(1ULL << 29)
+#     define UXEN_INIT_opt_whp_MASK			mask0
 };
 
 #endif

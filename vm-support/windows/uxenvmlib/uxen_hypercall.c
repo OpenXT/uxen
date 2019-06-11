@@ -28,6 +28,8 @@
 #include <xen/version.h>
 #include <xen/xen.h>
 
+#include <whpx-shared.h>
+
 #define HV_CPUID_LEAF_BASE 0x40000000
 #define HV_CPUID_LEAF_RANGE 0x10000
 #define HV_CPUID_LEAD_SKIP 0x100
@@ -46,6 +48,9 @@ uxen_hypercall_init(void)
     char signature[13];
     xen_extraversion_t extraversion;
     unsigned int i;
+
+    if (uxen_is_whp_present())
+        return 0; /* nothing to do */
 
     if (hypercall_page != NULL && hypercall_page_mfn != NULL) {
         uxen_msg("hypercall already initialized:");
@@ -120,9 +125,13 @@ uxen_hypercall_version(int cmd, void *arg)
 int
 uxen_hypercall_memory_op(int cmd, void *arg)
 {
-    if (!hypercall_page)
-	return -ENOENT;
-    return (int)_hypercall2(hcall(memory_op), hcall_arg(cmd), hcall_arg(arg));
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return -ENOENT;
+        return (int)_hypercall2(hcall(memory_op), hcall_arg(cmd), hcall_arg(arg));
+    } else
+        return (int)_whpx_hypercall2(__WHPX_HYPERVISOR_memory_op, hcall_arg(cmd),
+            hcall_arg(arg));
 }
 
 int
@@ -135,45 +144,60 @@ uxen_hypercall_hvm_op(int cmd, void *arg)
 
 uintptr_t uxen_hypercall1(unsigned int nr, uintptr_t a1)
 {
-    if (!hypercall_page)
-	return (uintptr_t) -ENOENT;
-    return _hypercall1(hcall_by_nr(nr), a1);
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return (uintptr_t) -ENOENT;
+        return _hypercall1(hcall_by_nr(nr), a1);
+    } else
+        return _whpx_hypercall1(nr, a1);
 }
  
 uintptr_t uxen_hypercall2(unsigned int nr, uintptr_t a1, uintptr_t a2)
 {
-    if (!hypercall_page)
-	return (uintptr_t) -ENOENT;
-    return _hypercall2(hcall_by_nr(nr), a1, a2);
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return (uintptr_t) -ENOENT;
+        return _hypercall2(hcall_by_nr(nr), a1, a2);
+    } else
+        return _whpx_hypercall2(nr, a1, a2);
 }
  
 uintptr_t uxen_hypercall3(unsigned int nr, uintptr_t a1, uintptr_t a2, uintptr_t a3)
 {
-    if (!hypercall_page)
-	return (uintptr_t) -ENOENT;
-    return _hypercall3(hcall_by_nr(nr), a1, a2, a3);
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return (uintptr_t) -ENOENT;
+        return _hypercall3(hcall_by_nr(nr), a1, a2, a3);
+    } else
+        return _whpx_hypercall3(nr, a1, a2, a3);
 }
  
 uintptr_t uxen_hypercall4(unsigned int nr, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4)
 {
+    if (!uxen_is_whp_present()) {
     if (!hypercall_page)
 	return (uintptr_t) -ENOENT;
     return _hypercall4(hcall_by_nr(nr), a1, a2, a3, a4);
+    } else
+        return _whpx_hypercall4(nr, a1, a2, a3, a4);
 }
  
 uintptr_t uxen_hypercall5(unsigned int nr, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5)
 {
-    if (!hypercall_page)
-	return (uintptr_t) -ENOENT;
-    return _hypercall5(hcall_by_nr(nr), a1, a2, a3, a4, a5);
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return (uintptr_t) -ENOENT;
+        return _hypercall5(hcall_by_nr(nr), a1, a2, a3, a4, a5);
+    } else
+        return _whpx_hypercall5(nr, a1, a2, a3, a4, a5);
 }
-
 
 uintptr_t uxen_hypercall6(unsigned int nr, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6)
 {
-    if (!hypercall_page)
-	return (uintptr_t) -ENOSYS; 
-    return _hypercall6(hcall_by_nr(nr), a1, a2, a3, a4, a5, a6);
+    if (!uxen_is_whp_present()) {
+        if (!hypercall_page)
+            return (uintptr_t) -ENOSYS; 
+        return _hypercall6(hcall_by_nr(nr), a1, a2, a3, a4, a5, a6);
+    } else
+        return _whpx_hypercall6(nr, a1, a2, a3, a4, a5, a6);
 }
- 
- 

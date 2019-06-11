@@ -26,6 +26,7 @@
 #include "clipboard.h"
 #include "hw/uxen_platform.h"
 #include "dm-features.h"
+#include "hbmon.h"
 
 #if defined(CONFIG_NICKEL)
 #include <dm/libnickel.h>
@@ -45,6 +46,8 @@
 #ifdef HAS_AUDIO
 #include "hw/uxen_audio_ctrl.h"
 #endif
+
+#include <dm/whpx/whpx.h>
 
 #include "vm-savefile-simple.h"
 
@@ -88,7 +91,12 @@ static void dump_stats(void)
 
 #ifdef CONFIG_DUMP_MEMORY_STAT
     int bln_sz = 0, bln_min = 0, bln_max = 0;
-    ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
+    if (!whpx_enable)
+        ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
+    else {
+        ret = 1;
+        info.domid = vm_id;
+    }
     uxen_platform_get_balloon_size(&bln_sz, &bln_min, &bln_max);
 #else  /* CONFIG_DUMP_MEMORY_STAT */
     ret = 1;
@@ -143,7 +151,6 @@ static void dump_stats(void)
     prevwrops = wrops;
 #endif  /* CONFIG_DUMP_BLOCK_STAT */
 }
-
 #ifdef CONFIG_DUMP_SWAP_STAT
 extern void dump_swapstat(void);
 #endif  /* CONFIG_DUMP_SWAP_STAT */
@@ -270,7 +277,7 @@ mod_entries(struct fw_list_head *list, size_t *ent_count)
     return entries;
 }
 
-static void
+void
 vm_cleanup_modules(struct xc_hvm_module *modules, size_t count)
 {
     int i;
@@ -282,7 +289,7 @@ vm_cleanup_modules(struct xc_hvm_module *modules, size_t count)
     free(modules);
 }
 
-static struct xc_hvm_module *
+struct xc_hvm_module *
 vm_get_modules(int *mod_count)
 {
     struct xc_hvm_module *modules = NULL;
@@ -397,8 +404,9 @@ error_template_destroy(void)
 void
 vm_set_vpt_coalesce(int onoff)
 {
-    xc_set_hvm_param(xc_handle, vm_id, HVM_PARAM_VPT_COALESCE_NS,
-                     onoff ? vm_vpt_coalesce_period : 0);
+    if (!whpx_enable)
+        xc_set_hvm_param(xc_handle, vm_id, HVM_PARAM_VPT_COALESCE_NS,
+            onoff ? vm_vpt_coalesce_period : 0);
 }
 
 void
@@ -419,6 +427,9 @@ vm_create(int restore_mode)
     if (v4v_idtoken_is_vm_uuid)
         memcpy(v4v_idtoken, vm_uuid, sizeof(v4v_idtoken));
 
+    if (whpx_enable)
+        return;
+
     ret = uxen_create_vm(uxen_handle, vm_uuid, v4v_idtoken,
                          XEN_DOMCTL_CDF_hvm_guest | XEN_DOMCTL_CDF_hap |
                          (restore_mode == VM_RESTORE_TEMPLATE ?
@@ -432,8 +443,8 @@ vm_create(int restore_mode)
     debug_printf("created vm: domid %d\n", vm_id);
 }
 
-void
-vm_init(const char *loadvm, int restore_mode)
+static void
+uxen_vm_init(const char *loadvm, int restore_mode)
 {
     uint64_t ram_size = vm_mem_mb << 20;
     struct hvm_info_table *hvm_info;
@@ -534,10 +545,14 @@ vm_init(const char *loadvm, int restore_mode)
     vm_time_offset = get_timeoffset();
     xc_domain_set_time_offset(xc_handle, vm_id, vm_time_offset);
 
+    hbmon_init();
+
 #if defined(CONFIG_VBOXDRV)
-    ret = sf_service_start();
-    if (ret)
-        err(1, "sf_service_start");
+    if (restore_mode != VM_RESTORE_TEMPLATE) {
+        ret = sf_service_start();
+        if (ret)
+            err(1, "sf_service_start");
+    }
 #endif
 
     if (!loadvm) {
@@ -586,11 +601,20 @@ vm_init(const char *loadvm, int restore_mode)
 
         xc_munmap(xc_handle, vm_id, hvm_info_page, XC_PAGE_SIZE);
     } else {
-	ret = vm_load(loadvm, restore_mode);
-	if (ret)
-	    err(1, "vm_load(%s, %s) failed", loadvm,
-		restore_mode == VM_RESTORE_TEMPLATE ? "template" :
-		(restore_mode == VM_RESTORE_CLONE ? "clone" : "load"));
+        ret = vm_load(loadvm, restore_mode);
+        if (ret) {
+            if (restore_mode == VM_RESTORE_CLONE &&
+                ret == XEN_HVMCONTEXT_xsave_area_incompatible) {
+
+                control_send_status("template", "reinit", NULL);
+                control_flush();
+                debug_printf("uxen_vm_init: template reinit requested\n");
+                errx(1, "vm_load(%s, clone) failed: %d", loadvm, ret);
+            }
+            err(1, "vm_load(%s, %s) failed", loadvm,
+                restore_mode == VM_RESTORE_TEMPLATE ? "template" :
+                (restore_mode == VM_RESTORE_CLONE ? "clone" : "load"));
+        }
         if (restore_mode == VM_RESTORE_TEMPLATE) {
             template_load_failed = false;
             control_send_status("template", "loaded", NULL);
@@ -630,28 +654,50 @@ vm_init(const char *loadvm, int restore_mode)
     dev_machine_creation_done();
 }
 
+void
+vm_init(const char *loadvm, int restore_mode)
+{
+    if (!whpx_enable)
+        uxen_vm_init(loadvm, restore_mode);
+    else {
+        int ret = whpx_vm_init(loadvm, restore_mode);
+
+        if (ret)
+            err(1, "failed to init whpx vm: %d", ret);
+#ifdef CONFIG_DUMP_PERIODIC_STATS
+        dump_periodic_stats_init();
+#endif  /* CONFIG_DUMP_PERIODIC_STAT */
+    }
+}
+
 int vm_is_paused(void)
 {
-    xc_dominfo_t info;
-    int ret;
+    if (!whpx_enable) {
+        xc_dominfo_t info;
+        int ret;
 
-    ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
-    if (ret)
-        return info.paused;
-    return 0;
+        ret = xc_domain_getinfo(xc_handle, vm_id, 1, &info);
+        if (ret)
+            return info.paused;
+        return 0;
+    } else
+        return whpx_vm_is_paused();
 }
 
 int vm_pause(void)
 {
-    return xc_domain_pause(xc_handle, vm_id);
+    if (!whpx_enable)
+        return xc_domain_pause(xc_handle, vm_id);
+    else
+        return whpx_vm_pause();
 }
 
 int vm_unpause(void)
 {
-    int ret;
-
-    ret = xc_domain_unpause(xc_handle, vm_id);
-    return ret;
+    if (!whpx_enable)
+        return xc_domain_unpause(xc_handle, vm_id);
+    else
+        return whpx_vm_unpause();
 }
 
 static uxen_notification_event exceptionEvent;
@@ -698,9 +744,12 @@ vm_exit(void *opaque)
     static uint32_t destroy_done = 0;
     static uint32_t ending = 0;
 
-    if (cmpxchg(&destroy_done, 0, 1) == 0)
-        uxen_destroy(vm_uuid);
-
+    if (cmpxchg(&destroy_done, 0, 1) == 0) {
+        if (!whpx_enable)
+            uxen_destroy(vm_uuid);
+        else
+            whpx_destroy();
+    }
     if (running_vcpus)
         return;
 
@@ -743,6 +792,7 @@ vm_exit(void *opaque)
     sf_service_stop();
     clip_service_stop();
 #endif
+    hbmon_cleanup();
 
     console_exit();
     control_exit();
@@ -885,6 +935,8 @@ vm_set_run_mode(enum vm_run_mode r)
     critical_section_enter(&vm_run_mode_lock);
     switch (run_mode) {
     case PAUSE_VM:
+        if (r == SUSPEND_VM)
+            break;
     case SETUP_VM:
     case SUSPEND_VM:
         if (r == RUNNING_VM)
@@ -932,7 +984,10 @@ vm_poweroff(void)
 {
     int ret;
 
-    ret = xc_domain_shutdown(xc_handle, vm_id, SHUTDOWN_poweroff);
+    if (!whpx_enable)
+        ret = xc_domain_shutdown(xc_handle, vm_id, SHUTDOWN_poweroff);
+    else
+        ret = whpx_vm_shutdown(SHUTDOWN_poweroff);
     if (ret)
         warn("xc_domain_shutdown(poweroff, %d) failed ret = %d", vm_id, ret);
     else

@@ -94,8 +94,6 @@ release_fd_assoc(void *p)
     aff = uxen_lock();
     vmi = fda->vmi;
     if (vmi) {
-        if (vmi->vmi_mdm_fda == fda)
-            mdm_clear_all(vmi);
         prepare_release_fd_assoc(fda);
         if (fda->vmi_destroy_on_close)
             vmi->vmi_marked_for_destroy = 1;
@@ -338,6 +336,24 @@ uxen_ioctl(__inout DEVICE_OBJECT *DeviceObject, __inout IRP *pIRP)
     }
     vmi = fda->vmi;
 
+    /* only allow subset of calls on WHP */
+    if (uxen_whp) {
+        switch (IoControlCode) {
+        case ICC(UXENVERSION):
+        case ICC(UXENLOAD):
+        case ICC(UXENUNLOAD):
+        case ICC(UXENINIT):
+        case ICC(UXENSHUTDOWN):
+        case ICC(UXENLOGGING):
+            break; /* allow */
+        default:
+            IOCTL_TRACE("uxen_ioctl(%lx)\n", IoControlCode);
+            IOCTL_FAILURE(STATUS_NOT_IMPLEMENTED,
+                "uxen_ioctl(%lx) not implemented on WHP", IoControlCode);
+            goto out;
+        }
+    }
+
     switch (IoControlCode) {
     case ICC(UXENVERSION):
 	IOCTL_TRACE("uxen_ioctl(UXENVERSION, %p, %x)\n", OutputBuffer,
@@ -352,17 +368,6 @@ uxen_ioctl(__inout DEVICE_OBJECT *DeviceObject, __inout IRP *pIRP)
     case ICC(UXENLOAD):
 	IOCTL_TRACE("uxen_ioctl(UXENLOAD, %p, %x)\n", InputBuffer,
 		    InputBufferLength);
-#if !defined(__UXEN_EMBEDDED__)
-	UXEN_CHECK_MODE_NOT(UXEN_MODE_LOADED, "UXENLOAD");
-        UXEN_CHECK_INPUT_BUFFER("UXENLOAD", struct uxen_load_desc);
-        IOCTL_ADMIN_CHECK("UXENLOAD");
-        ret = uxen_load((struct uxen_load_desc *)InputBuffer);
-        if (ret == 0)
-            SET_UXEN_MODE(UXEN_MODE_LOADED);
-        else
-            IOCTL_FAILURE(UXEN_NTSTATUS_FROM_ERRNO(-ret),
-                          "uxen_ioctl(UXENLOAD) fail: %d", -ret);
-#endif
 	break;
     case ICC(UXENUNLOAD):
 	IOCTL_TRACE("uxen_ioctl(UXENUNLOAD)\n");
@@ -376,10 +381,6 @@ uxen_ioctl(__inout DEVICE_OBJECT *DeviceObject, __inout IRP *pIRP)
     case ICC(UXENINIT):
 	IOCTL_TRACE("uxen_ioctl(UXENINIT)\n");
 	UXEN_CHECK_MODE_NOT(UXEN_MODE_FAILED, "UXENINIT");
-#if !defined(__UXEN_EMBEDDED__)
-	UXEN_CHECK_MODE(UXEN_MODE_LOADED, "UXENINIT");
-#endif
-        uxen_sys_start_v4v();
         /* uxen_op_init does UXEN_CHECK_INPUT_BUFFER(struct uxen_init_desc) */
         ret = uxen_op_init(fda, (struct uxen_init_desc *)InputBuffer,
                            InputBufferLength, DeviceObject);
@@ -389,24 +390,19 @@ uxen_ioctl(__inout DEVICE_OBJECT *DeviceObject, __inout IRP *pIRP)
                           "uxen_ioctl(UXENINIT) fail: %d", -ret);
             break;
         }
+        uxen_sys_start_v4v();
         SET_UXEN_MODE(UXEN_MODE_INITIALIZED);
 	break;
     case ICC(UXENSHUTDOWN):
 	IOCTL_TRACE("uxen_ioctl(UXENSHUTDOWN)\n");
-#if defined(__UXEN_EMBEDDED__)
 	UXEN_CHECK_MODE_NOT(UXEN_MODE_SHUTDOWN, "UXENSHUTDOWN");
-#endif
 	UXEN_CHECK_MODE(UXEN_MODE_INITIALIZED, "UXENSHUTDOWN");
         IOCTL_ADMIN_CHECK("UXENSHUTDOWN");
 	ret = uxen_op_shutdown();
 	if (ret)
 	    break;
         uxen_sys_stop_v4v();
-#if !defined(__UXEN_EMBEDDED__)
-        SET_UXEN_MODE(UXEN_MODE_LOADED);
-#else
         SET_UXEN_MODE(UXEN_MODE_SHUTDOWN);
-#endif
 	break;
     case ICC(UXENPROCESSEXITHELPER): {
         KIRQL irql;
@@ -512,23 +508,6 @@ uxen_ioctl(__inout DEVICE_OBJECT *DeviceObject, __inout IRP *pIRP)
         UXEN_CHECK_VMI("UXENSETEVENTCHANNEL", vmi);
         DOM0_CALL("UXENSETEVENTCHANNEL", uxen_op_set_event_channel,
                   struct uxen_event_channel_desc, vmi, fda);
-	break;
-    case ICC(UXENMEMCACHEINIT):
-        IOCTL_VM_ADMIN_CHECK("UXENMEMCACHEINIT");
-        UXEN_CHECK_VMI("UXENMEMCACHEINIT", vmi);
-        UXEN_CHECK_OUTPUT_BUFFER("UXENMEMCACHEINIT",
-                                 struct uxen_memcacheinit_desc);
-        ret = init_fd_assoc_user_mappings("UXENMEMCACHEINIT", fda);
-        if (ret)
-            goto out;
-        OP_CALL("UXENMEMCACHEINIT", mdm_init,
-                struct uxen_memcacheinit_desc, fda);
-	break;
-    case ICC(UXENMEMCACHEMAP):
-        IOCTL_VM_ADMIN_CHECK("UXENMEMCACHEMAP");
-        UXEN_CHECK_VMI("UXENMEMCACHEMAP", vmi);
-        OP_CALL("UXENMEMCACHEMAP", mdm_map,
-                struct uxen_memcachemap_desc, fda);
 	break;
     case ICC(UXENQUERYVM):
         IOCTL_ADMIN_CHECK("UXENQUERYVM");

@@ -37,7 +37,7 @@ uxen_vprintk(struct vm_info_shared *vmi, const char *fmt, va_list ap)
 }
 
 #ifdef UXEN_DPRINTK
-uint64_t __cdecl
+uint64_t
 uxen_dprintk(struct vm_info_shared *vmi, const char *fmt, ...)
 {
     va_list ap;
@@ -50,15 +50,28 @@ uxen_dprintk(struct vm_info_shared *vmi, const char *fmt, ...)
     return ret;
 }
 #else
-uint64_t __cdecl
+uint64_t
 uxen_dprintk(struct vm_info_shared *vmi, const char *fmt, ...)
 {
     return 0;
 }
 #endif
 
-uint64_t __cdecl
+uint64_t
 uxen_printk(struct vm_info_shared *vmi, const char *fmt, ...)
+{
+    va_list ap;
+    int ret;
+
+    va_start(ap, fmt);
+    ret = uxen_vprintk(vmi, fmt, ap);
+    va_end(ap);
+
+    return ret;
+}
+
+uint64_t __cdecl
+ui_printf(struct vm_info_shared *vmi, const char *fmt, ...)
 {
     va_list ap;
     int ret;
@@ -73,7 +86,7 @@ uxen_printk(struct vm_info_shared *vmi, const char *fmt, ...)
 #define TIMESTAMP_FMT "%04d/%02d/%02d-%02d:%02d:%02d: %s"
 #define TIMESTAMP_size (4 + 1 + 2 + 1 + 2 + 1 + 2 + 1 + 2 + 1 + 2 + 2)
 
-uint64_t __cdecl
+uint64_t
 uxen_printk_with_timestamp(struct vm_info_shared *vmi, const char *_fmt, ...)
 {
     char *fmt = _alloca(TIMESTAMP_size + strlen(_fmt) + 1);

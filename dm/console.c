@@ -250,16 +250,22 @@ PixelFormat default_pixelformat(int bpp)
     return pf;
 }
 
-/*
- * Time to wait in ms between vram event and refresh.
- */
-#define REFRESH_TIMEOUT_MS 5
-static uxen_notification_event vram_event;
+/* Time to wait in ms between vram event and refresh. */
+uint64_t vm_vram_refresh_delay = 5;
+/* Period between refreshes, when vm-dirty-tracking is disabled. */
+uint64_t vm_vram_refresh_period = 30;
+static int vram_refresh_periodic = 0;
+static int vram_refresh_periodic_initialized = 0;
+uxen_notification_event vram_event;
+
 static struct Timer *vram_timer = NULL;
 
-static void refresh(void *opaque)
+void do_dpy_force_refresh(void *opaque)
 {
     struct display_state *ds;
+
+    if (vram_timer && vram_refresh_periodic)
+        mod_timer(vram_timer, get_clock_ms(vm_clock) + vm_vram_refresh_period);
 
     critical_section_enter(&desktop_lock);
     TAILQ_FOREACH(ds, &desktop, link)
@@ -271,19 +277,27 @@ void do_dpy_trigger_refresh(void *opaque)
 {
     uint64_t now = get_clock_ms(vm_clock);
 
-    if (vram_timer)
-        mod_timer(vram_timer, now + REFRESH_TIMEOUT_MS);
+    /* do not delay updates infinitely */
+    if (vram_timer && !timer_pending(vram_timer))
+        mod_timer(vram_timer, now + vm_vram_refresh_delay);
 }
 
 void do_dpy_setup_refresh(void)
 {
-    vram_timer = new_timer_ms(vm_clock, refresh, NULL);
-    mod_timer(vram_timer, get_clock_ms(vm_clock) + REFRESH_TIMEOUT_MS);
+    vram_timer = new_timer_ms(vm_clock, do_dpy_force_refresh, NULL);
+    if (!vm_vram_dirty_tracking && !vram_refresh_periodic_initialized) {
+        /* setup periodic refresh after initial refresh */
+        vram_refresh_periodic = 1;
+        vram_refresh_periodic_initialized = 1;
+    }
 
     uxen_notification_event_init(&vram_event);
     uxen_notification_add_wait_object(&vram_event, do_dpy_trigger_refresh, NULL,
                                       NULL);
     uxen_ioemu_event(UXEN_IOEMU_EVENT_VRAM, &vram_event);
+
+    /* initial refresh */
+    do_dpy_force_refresh(NULL);
 }
 
 void
@@ -398,6 +412,17 @@ console_start(void)
     critical_section_leave(&desktop_lock);
 
     do_dpy_setup_refresh();
+}
+
+void
+console_mask_periodic(int masked)
+{
+    int enable = !vm_vram_dirty_tracking && !masked;
+
+    vram_refresh_periodic = enable;
+    vram_refresh_periodic_initialized = 1;
+    if (vram_timer && !timer_pending(vram_timer))
+        mod_timer(vram_timer, get_clock_ms(vm_clock) + 5 /* MS */);
 }
 
 struct display_surface *

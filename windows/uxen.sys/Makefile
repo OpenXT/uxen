@@ -22,7 +22,6 @@ uxen_sys_SRCS = \
 	uxen_logging.c \
 	uxen_mem.c \
 	uxen_ops.c \
-	memcache-dm.c \
 	pagemap.c \
 	rbtree.c \
 	v4v.c \
@@ -35,6 +34,7 @@ uxen_sys_SRCS += \
 else
 uxen_sys_SRCS += \
 	uxen_stackwalk.c \
+	pvi.c \
 	amd64/uxen_sys.asm \
 	amd64/uxen_debug_sup.asm
 endif
@@ -59,7 +59,8 @@ uxen_sys_INCLUDE = \
 	$(TOPDIR)/common \
 	$(TOPDIR)/common/include \
 	$(TOPDIR)/windows/include \
-	$(TOPDIR)/windows/uxenv4vlib
+	$(TOPDIR)/windows/uxenv4vlib \
+	$(TOPDIR)/windows/uxenv4vproxy
 uxen_sys_INCLUDE_dos := $(foreach include,$(uxen_sys_INCLUDE),//I$(call dospath,$(include)))
 
 ifeq ($(TARGET_HOST_BITS),32)
@@ -77,6 +78,7 @@ uxen_sys_ASFLAGS = \
 	//safeseh //coff //Zm
 uxen_sys_LDOBJS = \
 	..\\uxenv4vlib\\uxenv4vlib.lib \
+	..\\uxenv4vproxy\\uxenv4vproxy.lib \
 	$(BUILDDIR_xen)/uxen-cv.obj
 else
 uxen_sys_CPPFLAGS = \
@@ -92,6 +94,7 @@ uxen_sys_LDFLAGS = \
 	//entry:GsDriverEntry
 uxen_sys_LDOBJS = \
 	..\\uxenv4vlib\\uxenv4vlib.lib \
+	..\\uxenv4vproxy\\uxenv4vproxy.lib \
 	$(BUILDDIR_xen)/uxen-cv.obj $(BUILDDIR_xen)/uxen-xpdata.obj
 uxen_sys_ASFLAGS =
 endif
@@ -100,11 +103,11 @@ $(DEBUG_ONLY)uxen_sys_CPPFLAGS += \
 	//DDBG=1 \
 	//DDEPRECATE_DDK_FUNCTIONS=1 //DMSC_NOOPT
 $(DEBUG_ONLY)uxen_sys_CFLAGS += \
-	//Od //Oi
+	//Od
 $(REL_ONLY)uxen_sys_CPPFLAGS += \
 	//DNDEBUG
 $(REL_ONLY)uxen_sys_CFLAGS += \
-	//WX //Oxs
+	//Oxs
 
 uxen_sys_CPPFLAGS += \
 	//DPOOL_NX_OPTIN=1 \
@@ -117,7 +120,7 @@ uxen_sys_CPPFLAGS += \
 	//DNTDDI_VERSION=0x06010000 \
 	//D_KERNEL_MODE \
 	//D__XEN__ //D__UXEN__ //D__UXEN_SYS__ \
-	//D__MS_ABI__ //D__UXEN_EMBEDDED__ //D__OBJ_PE__ \
+	//D__MS_ABI__ //D__OBJ_PE__ \
 	//DUXEN_HOST_WINDOWS \
 	//D__KERNEL__ //D_DEFENSIVE_LIMITS \
 	//DBUILD_INFO="\"build_info.h\""
@@ -162,7 +165,7 @@ $(uxen_sys_OBJ_c): %.obj: %.c
 	  $(EWDK_INCLUDES) \
 	  $(uxen_sys_CPPFLAGS) \
 	  $(uxen_sys_CFLAGS) \
-	  //c //Zc:wchar_t- //Zl //Zp8 //Gy \
+	  //c //Zc:wchar_t- //Zl //Zp8 //Gy //Oi \
 	  -cbstring //WX //EHs-c- //GR- //GF //GS //Zi //Zi \
 	  //Fd$(call dospath,.)\\ \
 	  //DKMDF_MAJOR_VERSION_STRING=01 //DKMDF_MINOR_VERSION_STRING=009 \

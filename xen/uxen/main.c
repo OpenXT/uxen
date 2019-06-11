@@ -29,8 +29,8 @@
 
 #include <uxen/uxen.h>
 #include <uxen/uxen_desc.h>
+#include <uxen/uxen_link.h>
 #include <uxen/mapcache.h>
-#include <uxen/memcache-dm.h>
 
 int uxen_verbose = 0;
 
@@ -42,14 +42,6 @@ DEFINE_PER_CPU(struct uxen_hypercall_desc *, hypercall_args);
 
 uint64_t aligned_throttle_period = -1ULL;
 
-static void _cpu_irq_disable(void);
-static void _cpu_irq_enable(void);
-static int _cpu_irq_is_enabled(void);
-static void _cpu_irq_save(unsigned long *x);
-static void _cpu_irq_restore(unsigned long x);
-
-static cpumask_t cpu_down_map;
-
 struct _uxen_info _uxen_info = {
         .ui_sizeof_struct_page_info = sizeof(struct page_info),
 
@@ -58,18 +50,10 @@ struct _uxen_info _uxen_info = {
         PAGE_SHIFT,
 
 #ifdef UXEN_HOST_WINDOWS
-        .ui_map_page = mapcache_map_page,
-        .ui_unmap_page_va = mapcache_unmap_page_va,
         .ui_mapcache_size = MAPCACHE_SIZE,
 #endif  /* UXEN_HOST_WINDOWS */
 
         .ui_vframes_fill = VFRAMES_PCPU_FILL,
-
-        .ui_cli = _cpu_irq_disable,
-        .ui_sti = _cpu_irq_enable,
-        .ui_irq_is_enabled = _cpu_irq_is_enabled,
-        .ui_irq_save = _cpu_irq_save,
-        .ui_irq_restore = _cpu_irq_restore,
 };
 
 /* SSS: use per_cpu for this? */
@@ -81,31 +65,28 @@ DEFINE_PER_CPU(uint32_t, host_cpu_preemption);
 uint32_t _host_cpu_preemption[NR_CPUS];
 #endif
 
-static void
+asmlinkage_abi void
 _cpu_irq_disable(void)
 {
 
     asm volatile ( "cli" : : : "memory" );
 }
 
-static void
+asmlinkage_abi void
 _cpu_irq_enable(void)
 {
 
-    if ((boot_cpu_data.x86_vendor ==  X86_VENDOR_INTEL) || ax_present)
-        asm volatile ( "sti" : : : "memory" );
-    else
-        asm volatile ( "stgi" : : : "memory" );
+    asm volatile ( "sti" : : : "memory" );
 }
 
-static void
+void
 _cpu_irq_save_flags(unsigned long *x)
 {
 
     asm volatile ( "pushf" __OS " ; pop" __OS " %0" : "=g" (*x));
 }
 
-static int
+int
 _cpu_irq_is_enabled(void)
 {
     unsigned long flags;
@@ -114,7 +95,7 @@ _cpu_irq_is_enabled(void)
     return !!(flags & (1<<9)); /* EFLAGS_IF */
 }
 
-static void
+void
 _cpu_irq_save(unsigned long *x)
 {
 
@@ -122,12 +103,28 @@ _cpu_irq_save(unsigned long *x)
     _cpu_irq_disable();
 }
 
-static void
+void
 _cpu_irq_restore(unsigned long x)
 {
 
     asm volatile ( "push" __OS " %0 ; popf" __OS
                    : : "g" (x) : "memory", "cc" );
+}
+
+void
+vmexec_irq_enable(void)
+{
+
+    /* irq enable used from check_work_vcpu to re-enable interrupts,
+     * interrupts were disabled in {vmx,svm}/entry.S:
+     * on intel - interrupts disabled via cli
+     * on amd - interrupts disabled via clgi
+     * on amd+ax - interrupts disabled via cli
+     */
+    if ((boot_cpu_data.x86_vendor ==  X86_VENDOR_INTEL) || ax_present)
+        asm volatile ( "sti" : : : "memory" );
+    else
+        asm volatile ( "stgi" : : : "memory" );
 }
 
 static void
@@ -159,8 +156,8 @@ do_lookup_vm(xen_domain_handle_t vm_uuid)
     return d ? (intptr_t)d->vm_info_shared : -ENOENT;
 }
 
-intptr_t __interface_fn
-__uxen_lookup_vm(xen_domain_handle_t vm_uuid)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_lookup_vm)(xen_domain_handle_t vm_uuid)
 {
     intptr_t ret;
 
@@ -261,9 +258,9 @@ do_setup_vm(struct uxen_createvm_desc *ucd, struct vm_info_shared *vmi,
     return ret;
 }
 
-intptr_t __interface_fn
-__uxen_setup_vm(struct uxen_createvm_desc *ucd, struct vm_info_shared *vmi,
-                struct vm_vcpu_info_shared **vcis)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_setup_vm)(struct uxen_createvm_desc *ucd, struct vm_info_shared *vmi,
+                 struct vm_vcpu_info_shared **vcis)
 {
     intptr_t ret;
 
@@ -327,6 +324,7 @@ do_run_vcpu(uint32_t domid, uint32_t vcpuid)
         hvm_cpu_on();
         if (!v->vcpu_id)
             v4v_resume(d);
+        p2m_alive(d);
         break;
 
     case VCI_RUN_MODE_PROCESS_IOREQ:
@@ -450,7 +448,7 @@ do_run_vcpu(uint32_t domid, uint32_t vcpuid)
 
         if (!vcpu_runnable(v) || v->runstate.state != RUNSTATE_running ||
             !v->context_loaded) {
-            v->arch.ctxt_switch_from(v);
+            HVM_FUNCS(ctxt_switch_from, v);
             v->is_running = 0;
 
             while ((v->runstate.state >= RUNSTATE_blocked &&
@@ -495,7 +493,7 @@ do_run_vcpu(uint32_t domid, uint32_t vcpuid)
                 }
             }
 
-            v->arch.ctxt_switch_to(v);
+            HVM_FUNCS(ctxt_switch_to, v);
         }
 
         if (!vci->vci_runnable)
@@ -527,7 +525,7 @@ do_run_vcpu(uint32_t domid, uint32_t vcpuid)
 
   out_reset_current:
     hvm_do_suspend(v);
-    v->arch.ctxt_switch_from(v);
+    HVM_FUNCS(ctxt_switch_from, v);
     v->is_running = 0;
     _end_execution(NULL);
 
@@ -538,8 +536,8 @@ do_run_vcpu(uint32_t domid, uint32_t vcpuid)
     return ret;
 }
 
-intptr_t __interface_fn
-__uxen_run_vcpu(uint32_t domid, uint32_t vcpuid)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_run_vcpu)(uint32_t domid, uint32_t vcpuid)
 {
     intptr_t ret;
 
@@ -579,8 +577,8 @@ do_destroy_vm(xen_domain_handle_t vm_uuid)
     return ret;
 }
 
-intptr_t __interface_fn
-__uxen_destroy_vm(xen_domain_handle_t vm_uuid)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_destroy_vm)(xen_domain_handle_t vm_uuid)
 {
     int ret;
 
@@ -598,8 +596,8 @@ __uxen_destroy_vm(xen_domain_handle_t vm_uuid)
     return ret;
 }
 
-void __interface_fn
-__uxen_shutdown_xen(void)
+void UXEN_INTERFACE_FN(
+__uxen_shutdown_xen)(void)
 {
 
     if (!dom0 || !dom0->vcpu)
@@ -611,13 +609,7 @@ __uxen_shutdown_xen(void)
 
     console_start_sync();
 
-    cpumask_copy(&cpu_down_map,&cpu_online_map);
-
-    on_selected_cpus(&cpu_online_map, do_hvm_cpu_down, NULL, 0);
-
-    printk("waiting to bring all cpus home\n");
-    while (!cpumask_empty(&cpu_down_map))
-        rep_nop();
+    on_selected_cpus(&cpu_online_map, do_hvm_cpu_down, NULL, 2);
 
     printk("clearing cpu_online_map\n");
     cpumask_clear(&cpu_online_map);
@@ -635,11 +627,10 @@ do_hvm_cpu_down(void *arg)
 {
 
     hvm_cpu_down();
-    cpumask_test_and_clear_cpu(smp_processor_id(), &cpu_down_map);
 }
 
-void __interface_fn
-__uxen_suspend_xen_prepare(void)
+void UXEN_INTERFACE_FN(
+__uxen_suspend_xen_prepare)(void)
 {
     struct domain *d;
 
@@ -661,8 +652,8 @@ __uxen_suspend_xen_prepare(void)
     end_execution();
 }
 
-void __interface_fn
-__uxen_suspend_xen(void)
+void UXEN_INTERFACE_FN(
+__uxen_suspend_xen)(void)
 {
 
     if (!dom0 || !dom0->vcpu)
@@ -671,14 +662,7 @@ __uxen_suspend_xen(void)
     uxen_set_current(dom0->vcpu[smp_processor_id()]);
     current->is_privileged = 1;
 
-    cpumask_copy(&cpu_down_map,&cpu_online_map);
-
-    on_selected_cpus(&cpu_online_map, do_hvm_cpu_down, NULL, 0);
-
-    printk("waiting to bring all cpus home\n");
-    while (!cpumask_empty(&cpu_down_map))
-        rep_nop();
-
+    on_selected_cpus(&cpu_online_map, do_hvm_cpu_down, NULL, 2);
     suspend_platform_time();
 
     current->is_privileged = 0;
@@ -696,8 +680,8 @@ do_hvm_cpu_up(void *arg)
     cpumask_clear_cpu(smp_processor_id(), &hvm_cpu_up_mask);
 }
 
-void __interface_fn
-__uxen_resume_xen(void)
+void UXEN_INTERFACE_FN(
+__uxen_resume_xen)(void)
 {
     struct domain *d;
 
@@ -766,11 +750,11 @@ do_hypercall(struct uxen_hypercall_desc *uhd)
     return -ENOSYS;
 }
 
-intptr_t __interface_fn
-__uxen_hypercall(struct uxen_hypercall_desc *uhd,
-                 struct vm_info_shared *target_vmis,
-                 void *user_access_opaque,
-                 uint32_t privileged)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_hypercall)(struct uxen_hypercall_desc *uhd,
+                  struct vm_info_shared *target_vmis,
+                  void *user_access_opaque,
+                  uint32_t privileged)
 {
     intptr_t ret;
 
@@ -833,8 +817,8 @@ free_dom0(void)
     }
 }
 
-void __interface_fn
-__uxen_add_heap_memory(uint64_t start, uint64_t end)
+void UXEN_INTERFACE_FN(
+__uxen_add_heap_memory)(uint64_t start, uint64_t end)
 {
 
 #ifdef __i386__
@@ -851,8 +835,8 @@ __uxen_add_heap_memory(uint64_t start, uint64_t end)
 #endif
 }
 
-intptr_t __interface_fn
-__uxen_handle_keypress(unsigned char key)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_handle_keypress)(unsigned char key)
 {
 
     if (!idle_vcpu[smp_processor_id()])
@@ -869,8 +853,8 @@ __uxen_handle_keypress(unsigned char key)
     return 0;
 }
 
-void __interface_fn
-__uxen_run_idle_thread(uint32_t had_timeout)
+void UXEN_INTERFACE_FN(
+__uxen_run_idle_thread)(uint32_t had_timeout)
 {
 
     if (!idle_vcpu[smp_processor_id()])
@@ -904,8 +888,8 @@ static void rcu_barrier_callback(struct rcu_head *head)
 
 static DEFINE_PER_CPU(struct rcu_barrier_data, flush_rcu_data);
 
-intptr_t __interface_fn
-__uxen_flush_rcu(uint32_t complete)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_flush_rcu)(uint32_t complete)
 {
     int cpu = host_processor_id();
 
@@ -1002,8 +986,8 @@ options_parse(const struct uxen_init_desc *init_options,
 }
 
 /* adapted from arch/x86/traps.c:do_invalid_op */
-intptr_t __interface_fn
-__uxen_process_ud2(struct cpu_user_regs *regs)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_process_ud2)(struct cpu_user_regs *regs)
 {
     struct bug_frame *bug;
     struct bug_frame_str *bug_str;
@@ -1092,8 +1076,8 @@ __uxen_process_ud2(struct cpu_user_regs *regs)
     return 1;
 }
 
-intptr_t __interface_fn
-__uxen_lookup_symbol(uint64_t address, char *buffer, uint32_t buflen)
+intptr_t UXEN_INTERFACE_FN(
+__uxen_lookup_symbol)(uint64_t address, char *buffer, uint32_t buflen)
 {
     const char *name;
     unsigned long offset, size, flags;

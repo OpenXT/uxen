@@ -75,13 +75,6 @@ static int hap_enable_vram_tracking(struct domain *d)
     /* set l1e entries of P2M table to be read-only. */
     p2m_change_type_range(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                           p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
-
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
 
     return 0;
 }
@@ -101,12 +94,6 @@ static int hap_disable_vram_tracking(struct domain *d)
     p2m_change_type_range(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                           p2m_ram_logdirty, p2m_ram_rw);
 
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
-
     return 0;
 }
 
@@ -120,13 +107,6 @@ static void hap_clean_vram_tracking(struct domain *d)
     /* set l1e entries of P2M table to be read-only. */
     p2m_change_type_range(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                           p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
-
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
 }
 
 static int hap_enable_vram_tracking_l2(struct domain *d)
@@ -144,13 +124,7 @@ static int hap_enable_vram_tracking_l2(struct domain *d)
     /* set l2e entries of P2M table to be read-only. */
     p2m_change_type_range_l2(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                              p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
 
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
     return 0;
 }
 
@@ -169,11 +143,6 @@ static int hap_disable_vram_tracking_l2(struct domain *d)
     p2m_change_type_range_l2(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                              p2m_ram_logdirty, p2m_ram_rw);
 
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
     return 0;
 }
 
@@ -187,13 +156,6 @@ static void hap_clean_vram_tracking_l2(struct domain *d)
     /* set l1e entries of P2M table to be read-only. */
     p2m_change_type_range_l2(d, dirty_vram->begin_pfn, dirty_vram->end_pfn, 
                              p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
-
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
 }
 
 static void hap_vram_tracking_init(struct domain *d)
@@ -299,13 +261,6 @@ static int hap_enable_log_dirty(struct domain *d)
 
     /* set l1e entries of P2M table to be read-only. */
     p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
-
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
 
     return 0;
 }
@@ -318,6 +273,7 @@ static int hap_disable_log_dirty(struct domain *d)
 
     /* set l1e entries of P2M table with normal mode */
     p2m_change_entry_type_global(d, p2m_ram_logdirty, p2m_ram_rw);
+
     return 0;
 }
 
@@ -325,13 +281,6 @@ static void hap_clean_dirty_bitmap(struct domain *d)
 {
     /* set l1e entries of P2M table to be read-only. */
     p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_logdirty);
-    pt_sync_domain(d);
-
-    if (!ax_pv_ept) {
-        if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-            flush_tlb_mask(d->domain_dirty_cpumask);
-    } else
-        ax_pv_ept_flush(p2m_get_hostp2m(d));
 }
 
 void hap_logdirty_init(struct domain *d)
@@ -1061,9 +1010,10 @@ DEBUG();
 #endif
 #endif  /* __UXEN__ */
 
+#ifndef __UXEN__
 static void
 hap_write_p2m_entry(struct vcpu *v, unsigned long gfn, l1_pgentry_t *p,
-                    mfn_t table_mfn, l1_pgentry_t new, unsigned int level)
+                    l1_pgentry_t new, unsigned int level)
 {
     struct domain *d = v->domain;
     uint32_t old_flags;
@@ -1094,12 +1044,12 @@ hap_write_p2m_entry(struct vcpu *v, unsigned long gfn, l1_pgentry_t *p,
 
     safe_write_pte(p, new);
     if ( (old_flags & _PAGE_PRESENT)
+         && !p2m_is_logdirty(p2m_flags_to_type(l1e_get_flags(new)))
          && (level == 1 || (level == 2 && (old_flags & _PAGE_PSE))) ) {
-        if (!ax_pv_ept) {
-            if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD)
-                flush_tlb_mask(d->domain_dirty_cpumask);
-        } else
-            ax_tlbflush = 1;
+             if (!ax_pv_ept)
+                pt_sync_domain(d);
+             else
+                ax_tlbflush = 1;
     }
 
 #ifndef __UXEN__
@@ -1119,12 +1069,13 @@ hap_write_p2m_entry(struct vcpu *v, unsigned long gfn, l1_pgentry_t *p,
     }
 
     paging_unlock(d);
-    
+
 #ifndef __UXEN__
     if ( flush_nestedp2m )
         p2m_flush_nestedp2m(d);
 #endif  /* __UXEN__ */
 }
+#endif  /* __UXEN__ */
 
 static unsigned long hap_gva_to_gfn_real_mode(
     struct vcpu *v, struct p2m_domain *p2m, unsigned long gva,
@@ -1151,7 +1102,9 @@ static const struct paging_mode hap_paging_real_mode = {
     .p2m_ga_to_gfn          = hap_p2m_ga_to_gfn_real_mode,
     .update_cr3             = hap_update_cr3,
     .update_paging_modes    = hap_update_paging_modes,
+#ifndef __UXEN__
     .write_p2m_entry        = hap_write_p2m_entry,
+#endif  /* __UXEN__ */
     .guest_levels           = 1
 };
 
@@ -1162,7 +1115,9 @@ static const struct paging_mode hap_paging_protected_mode = {
     .p2m_ga_to_gfn          = hap_p2m_ga_to_gfn_2_levels,
     .update_cr3             = hap_update_cr3,
     .update_paging_modes    = hap_update_paging_modes,
+#ifndef __UXEN__
     .write_p2m_entry        = hap_write_p2m_entry,
+#endif  /* __UXEN__ */
     .guest_levels           = 2
 };
 
@@ -1173,7 +1128,9 @@ static const struct paging_mode hap_paging_pae_mode = {
     .p2m_ga_to_gfn          = hap_p2m_ga_to_gfn_3_levels,
     .update_cr3             = hap_update_cr3,
     .update_paging_modes    = hap_update_paging_modes,
+#ifndef __UXEN__
     .write_p2m_entry        = hap_write_p2m_entry,
+#endif  /* __UXEN__ */
     .guest_levels           = 3
 };
 
@@ -1185,7 +1142,9 @@ static const struct paging_mode hap_paging_long_mode = {
     .p2m_ga_to_gfn          = hap_p2m_ga_to_gfn_4_levels,
     .update_cr3             = hap_update_cr3,
     .update_paging_modes    = hap_update_paging_modes,
+#ifndef __UXEN__
     .write_p2m_entry        = hap_write_p2m_entry,
+#endif  /* __UXEN__ */
     .guest_levels           = 4
 };
 #endif

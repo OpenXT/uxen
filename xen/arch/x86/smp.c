@@ -24,6 +24,8 @@
 #include <asm/hvm/support.h>
 #include <mach_apic.h>
 
+#include <uxen/uxen_link.h>
+
 int hard_smp_processor_id(void)
 {
 #ifndef __UXEN__
@@ -374,17 +376,21 @@ void on_selected_cpus(
     call_data.info = info;
     call_data.wait = wait;
 
+    /* wait == 1 -- deprecated,
+       wait == 2 -- use send_IPI_mask, but wait for function completion */
     if (wait == 1) {
 	if (cpumask_equal(&call_data.selected, cpumask_of(smp_processor_id())))
 	    goto this_cpu;
         /* KeIpiGenericCall canary */
-#ifdef __x86_64__
-        WARNISH();
-#endif
+        WARN();
         UI_HOST_CALL(ui_on_selected_cpus, &call_data.selected,
                      __uxen_smp_call_function_interrupt);
 	goto wait;
     }
+#ifndef NDEBUG
+    else if (wait && wait != 2)
+	WARN();
+#endif	/* NDEBUG */
 
     send_IPI_mask(&call_data.selected, CALL_FUNCTION_VECTOR);
 
@@ -475,6 +481,7 @@ static void __smp_call_function_interrupt(void)
         return;
 
     if (!func) {
+        mb();
         cpumask_clear_cpu(cpu, &call_data.selected);
         return;
     }
@@ -515,8 +522,8 @@ fastcall void smp_call_function_interrupt(struct cpu_user_regs *regs)
 }
 
 #ifdef __UXEN__
-void __interface_fn
-__uxen_dispatch_ipi(int vector)
+void UXEN_INTERFACE_FN(
+__uxen_dispatch_ipi)(int vector)
 {
     unsigned long flags;
     int cpu = smp_processor_id();
@@ -548,6 +555,8 @@ __uxen_dispatch_ipi(int vector)
         gdb_pause_this_cpu(NULL);
         break;
 #endif
+    case UXEN_NOOP_VECTOR:
+        break;
     default:
         WARN_ONCE();
 	printk("uxen_ipi cpu %d vector %d\n", smp_processor_id(), vector);
@@ -589,6 +598,7 @@ uxen_ipi_mask(const cpumask_t *cpumask, int vector)
 #ifdef CRASH_DEBUG
     case GDB_STOP_VECTOR:
 #endif
+    case UXEN_NOOP_VECTOR:
 	local_irq_save(flags);
 	for_each_cpu(cpu, cpumask) {
 	    if (cpu == smp_processor_id())

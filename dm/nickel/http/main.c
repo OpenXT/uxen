@@ -728,7 +728,9 @@ static int prepare_clt_out(struct http_ctx *hp, bool prx_auth)
         if (create_http_header(prx_auth, hp->h.sv_name, use_head,
                      hp->h.daddr.sin_port, &hp->cx->clt_parser->h, auth_header, &hp->clt_out))
             goto out;
-        if (use_head) {
+        if (use_head || (hp->cx->clt_parser->h.method &&
+            strcasecmp(hp->cx->clt_parser->h.method, S_HEAD) == 0)) {
+
             hp->cx->flags |= CXF_HEAD_REQUEST;
             HLOG5("CXF_HEAD_REQUEST");
         }
@@ -1463,6 +1465,14 @@ static void hp_dns_proxy_check_domain_cb(void *opaque)
     struct http_ctx *hp;
 
     hp = dns->hp;
+
+    if (dns->response.cost_ms > 500)
+        HLOG4("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+    else
+        HLOG5("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+
     hp_put(hp);
     if ((hp->flags & HF_CLOSED))
         goto out;
@@ -3759,6 +3769,14 @@ static void dns_proxy_connect_cb(void *opaque)
     struct http_ctx *hp;
 
     hp = dns->hp;
+
+    if (dns->response.cost_ms > 500)
+        HLOG4("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+    else
+        HLOG5("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+
     hp_put(hp);
     if ((hp->flags & HF_CLOSED))
         goto out;
@@ -3810,6 +3828,14 @@ static void dns_direct_connect_cb(void *opaque)
     struct http_ctx *hp;
 
     hp = dns->hp;
+
+    if (dns->response.cost_ms > 500)
+        HLOG4("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+    else
+        HLOG5("%s lookup in %lu ms", dns->domain ? dns->domain : "(null)",
+               (unsigned long) dns->response.cost_ms);
+
     hp_put(hp);
     if ((hp->flags & HF_CLOSED))
         goto out;

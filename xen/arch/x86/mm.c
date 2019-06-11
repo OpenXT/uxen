@@ -5525,7 +5525,10 @@ long arch_memory_op(int op, XEN_GUEST_HANDLE(void) arg)
             k = min_t(unsigned int, list.gpfns_end - n,
                       PAGE_SIZE / sizeof(*arr));
             switch (list.map_mode) {
-            case XENMEM_TRANSLATE_MAP_RELEASE:
+            default:
+                rc = -EINVAL;
+                goto translate_gpfn_list_for_map_out;
+            case XENMEM_TRANSLATE_RELEASE:
                 if ( copy_from_guest_offset(arr, list.mfn_list, n, k) ) {
                     rc = -EFAULT;
                     goto translate_gpfn_list_for_map_out;
@@ -5534,14 +5537,13 @@ long arch_memory_op(int op, XEN_GUEST_HANDLE(void) arg)
                     if (__mfn_valid(arr[i]))
                         put_page(__mfn_to_page(arr[i]));
                 break;
-            default:
+            case XENMEM_TRANSLATE_MAP:
                 if ( copy_from_guest_offset(arr, list.gpfn_list, n, k) ) {
                     rc = -EFAULT;
                     goto translate_gpfn_list_for_map_out;
                 }
                 rc = p2m_translate(d, arr, k,
-                                   list.prot == XENMEM_TRANSLATE_PROT_WRITE,
-                                   list.map_mode == XENMEM_TRANSLATE_MAP_DM);
+                                   list.prot == XENMEM_TRANSLATE_PROT_WRITE);
                 if (rc < 0)
                     goto translate_gpfn_list_for_map_out;
                 if (copy_to_guest_offset(list.mfn_list, n, arr, rc)) {

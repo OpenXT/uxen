@@ -50,8 +50,6 @@ extern uint64_t vm_use_v4v_disk;
 extern uint64_t vm_v4v_storage;
 extern uint64_t vm_v4v_disable_ahci_clones;
 extern uint64_t vm_vram_dirty_tracking;
-extern uint64_t use_simple_mapping;
-extern uint64_t simple_map_size;
 extern uint8_t v4v_idtoken[16];
 extern uint8_t v4v_idtoken_is_vm_uuid;
 extern const char *vmsavefile_on_crash;
@@ -81,6 +79,7 @@ extern struct xc_interface_core *xc_handle;
 extern int xen_logdirty_enabled;
 extern uint64_t cuckoo_debug_on;
 extern uint64_t h264_offload;
+extern uint64_t hbmon_period, hbmon_timeout_period, hbmon_verbose;
 
 extern FILE *logfile;
 extern int loglevel;
@@ -91,5 +90,9 @@ extern uint64_t log_ratelimit_guest_burst;
 extern uint64_t log_ratelimit_guest_ms;
 
 extern const char *serial_devices[MAX_SERIAL_PORTS];
+
+extern uint64_t whpx_enable;
+extern uint64_t whpx_perf_stats;
+extern uint64_t whpx_reftsc;
 
 #endif	/* _DM_H_ */

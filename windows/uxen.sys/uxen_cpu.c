@@ -111,12 +111,9 @@ uxen_cpu_set_active_mask(uint64_t *mask)
 }
 
 void __cdecl
-uxen_cpu_on_selected(const void *mask, uintptr_t (*fn)(uintptr_t))
+ui_on_selected_cpus(const void *mask, uintptr_t (*fn)(uintptr_t))
 {
-
-#ifdef __x86_64__
     printk("KeIpiGenericCall(%p) was called\n", fn);
-#endif
     KeIpiGenericCall((PKIPI_BROADCAST_WORKER)fn, 0);
 }
 

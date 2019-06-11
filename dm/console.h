@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 
+extern uint64_t vm_vram_refresh_delay;
+extern uint64_t vm_vram_refresh_period;
+
 #define MOUSE_EVENT_LBUTTON 0x01
 #define MOUSE_EVENT_RBUTTON 0x02
 #define MOUSE_EVENT_MBUTTON 0x04
@@ -177,6 +180,9 @@ int console_init(const char *name);
 void console_start(void);
 void console_exit(void);
 
+void console_mask_periodic(int masked);
+
+void do_dpy_force_refresh(void *opaque);
 void do_dpy_trigger_refresh(void *opaque);
 void do_dpy_setup_refresh(void);
 

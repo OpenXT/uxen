@@ -149,6 +149,15 @@
 // CRASH_GUEST
 // on the next available L2 entry, inject an NMI into this cpu. Only in non-production builds.
 
+#define AX_CPUID_PV_MEMORY		0x354ec2f6
+// Hand memory to AX for use at this level
+// RBX contains the VA of the base of 
+// RCX bytes of ram that AX may use as it sees fit
+// NB: memory need not be PA contigugous
+// memory must be filled completely with the string yam\0 repeated
+//
+#define AX_PV_MEMORY_TAG 0x79616d00
+// The above is FOURCC 'yam\0'
 
 #define AX_CPUID_PV_VMACCESS		0x35327f4e
 // PV_VMACCESS
@@ -173,7 +182,6 @@
 //
 #define AX_PV_VMACCESS_SIG_1    0xa5420b0f
 #define AX_PV_VMACCESS_SIG_2    0x6212bf65
-
 
 
 // FIXME: document these
@@ -225,9 +233,17 @@
 #define AX_INSTBITS_NO_VMCS_SHADOW       (1UL <<18) /* CPU lacks VMCS shadowing */
 #define AX_INSTBITS_RAN_BCDBOOT          (1UL <<19) /* The machine was booting by luck and we asked windows to fix that, potentially portending doom. */
 #define AX_INSTBITS_BCDBOOT_FAILED       (1UL <<20) /* The machine was booting by luck and we asked windows to fix that, potentially portending doom. */
+#define AX_INSTBITS_NX_MISSING           (1UL <<21) /* NX is disabled */
 
 
 #define AX_INTEGRITY_PCR    9
 #define AX_PCR_QUOTE_GUID   {0x2152b036, 0x5549, 0x412d, {0x27, 0xa4, 0xf6, 0xb4, 0x7b, 0xf7, 0xd4, 0x88}}
+
+#define AX_PV_I_GA_VAR_NAME        "ax_pvi_sys"
+#define AX_PV_I_IFACE_NAME         L"\\Callback\\AXPVI"
+#define AX_PV_I_HASH_IDX	   0
+#define AX_PV_I_VMREAD_IDX	   1
+#define AX_PV_I_VMWRITE_IDX	   2
+#define AX_PV_I_MAX_IDX		   3
 
 #endif /* __AX_CONSTANTS_H__ */

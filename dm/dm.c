@@ -44,6 +44,7 @@
 
 #if defined(_WIN32)
 #include <filecrypt.h>
+#include "whpx/whpx.h"
 #endif
 
 char *dm_path = ".";
@@ -117,6 +118,9 @@ const char *console_type = "osx";
 #endif
 static char *control_path = NULL;
 uint64_t h264_offload = 0;
+uint64_t hbmon_period = 0;
+uint64_t hbmon_timeout_period = 2000;
+uint64_t hbmon_verbose = 0;
 
 const char *clipboard_formats_blacklist_host2vm = NULL;
 const char *clipboard_formats_whitelist_host2vm = NULL;
@@ -124,7 +128,7 @@ const char *clipboard_formats_blacklist_vm2host = NULL;
 const char *clipboard_formats_whitelist_vm2host = NULL;
 uint64_t deferred_clipboard = 0;
 
-xc_interface *xc_handle;
+xc_interface *xc_handle = NULL;
 int xen_logdirty_enabled = 0;
 
 FILE *logfile;
@@ -133,6 +137,10 @@ uint64_t hide_log_sensitive_data = 0;
 
 uint64_t log_ratelimit_guest_burst = 0;
 uint64_t log_ratelimit_guest_ms = 0;
+
+uint64_t whpx_enable = 0;
+uint64_t whpx_perf_stats = 0;
+uint64_t whpx_reftsc = 1;
 
 static void
 usage(const char *progname)
@@ -216,7 +224,7 @@ parse_options(int argc, char **argv)
 	  console_type = optarg;
 	  break;
       case 'c':
-	  vm_restore_mode = VM_RESTORE_CLONE;
+          vm_restore_mode = VM_RESTORE_CLONE;
 	  break;
       case 'l':
 	  vm_loadfile = optarg;
@@ -304,6 +312,10 @@ main(int argc, char **argv)
         errx(1, "no load file specified for template or clone");
 
     debug_printf("dm path:         %s\n", dm_path);
+    debug_printf("cmd line:       ");
+    for (i = 0; i < argc; i++)
+        debug_printf(" %s", argv[i]);
+    debug_printf("\n");
     debug_printf("boot order:      %s\n", boot_order);
 #ifdef MONITOR
     debug_printf("monitor device:  %s\n", monitor_device);
@@ -332,12 +344,17 @@ main(int argc, char **argv)
         errx(1, "xc_interface_open");
 
     if (uxen_setup((UXEN_HANDLE_T)xc_interface_handle(xc_handle)))
-	err(1, "uxen_setup");
+        err(1, "uxen_setup");
 
     uxen_log_version();
 
+    if (whpx_enable)
+        whpx_early_init();
+
     debug_printf("creating vm\n");
     vm_create(vm_restore_mode);
+    if (vm_restore_mode == VM_RESTORE_TEMPLATE)
+        goto vm_init;
 
     debug_printf("initializing device modules\n");
     module_call_init(MODULE_INIT_DEVICE);
@@ -358,6 +375,7 @@ main(int argc, char **argv)
     if (console_init(console_type))
         errx(1, "Failed to initialize GUI '%s'", console_type);
 
+vm_init:
     debug_printf("initializing vm\n");
     vm_init(vm_loadfile, vm_restore_mode);
 
@@ -381,10 +399,13 @@ main(int argc, char **argv)
     ni_start();
 #endif
 
-    vm_start_run();
+    if (!whpx_enable) {
+        vm_start_run();
 
-    if (!vm_start_paused)
-        vm_unpause();
+        if (!vm_start_paused)
+            vm_unpause();
+    } else
+        whpx_vm_start();
 
     if (h264_offload)
         uxenh264_start();

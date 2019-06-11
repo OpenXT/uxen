@@ -15,9 +15,15 @@ VPATH = $(SRCROOT)
 
 include $(SRCROOT)/Makefile.v4vtest
 
-dist: v4vtest$(EXE_SUFFIX) v4vtestrr$(EXE_SUFFIX)
-	$(_W)echo Installing from $(abspath $(<D)) to $(DISTDIR)
-	$(_W)echo Installing -- $(<F)
-	$(_V)$(call install_exe,$<,$(DISTDIR))
+PROGRAMS := v4vtest$(EXE_SUFFIX) v4vtestrr$(EXE_SUFFIX)
+
+_install_banner:
+	$(_W)echo Installing from $(abspath $(BUILDDIR)) to $(DISTDIR)
+
+$(patsubst %,install_%,$(PROGRAMS)): install_%: % _install_banner
+	$(_W)echo Installing -- $(<)
+	$(_V)$(call install_exe,$(<),$(DISTDIR))
+
+dist: $(patsubst %,install_%,$(PROGRAMS))
 
 endif # MAKENOW

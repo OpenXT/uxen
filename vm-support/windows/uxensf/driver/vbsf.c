@@ -1162,7 +1162,7 @@ NTSTATUS vbsfCreateConnection(IN PRX_CONTEXT RxContext, OUT PBOOLEAN PostToFsp)
 
         ZwClose(Handle);
 
-        /* Skip the "\Device\VBoxMiniRdr\;X:" of the string "\Device\VBoxMiniRdr\;X:\vboxsrv\sf" */
+        /* Skip the "\Device\uxenMiniRdr\;X:" of the string "\Device\uxenMiniRdr\;X:\vboxsrv\sf" */
         pwc = pwcConnectName;
         for (i = 0; i < cbConnectName; i += sizeof(WCHAR))
         {
@@ -1306,7 +1306,7 @@ NTSTATUS vbsfDeleteConnection(IN PRX_CONTEXT RxContext, OUT PBOOLEAN PostToFsp)
         PWCHAR pwc;
         ULONG i;
 
-        /* Skip the "\Device\VBoxMiniRdr\;X:" of the string "\Device\VBoxMiniRdr\;X:\vboxsrv\sf" */
+        /* Skip the "\Device\uxenMiniRdr\;X:" of the string "\Device\uxenMiniRdr\;X:\vboxsrv\sf" */
         pwc = pwcConnectName;
         for (i = 0; i < cbConnectName; i += sizeof(WCHAR))
         {
